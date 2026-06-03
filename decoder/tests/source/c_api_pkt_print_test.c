@@ -1128,6 +1128,11 @@ int main(int argc, char *argv[])
 
         /* print command line used */
         message[0] = 0;
+        /* test scripts look for this to allow them to ignore subsequent path differences in command line */
+        sprintf(message, "Test Command Line:-\n");
+        ocsd_def_errlog_msgout(message); 
+        
+        message[0] = 0;
         len = 0;
         for (i = 0; i < argc; i++)
         {
