@@ -219,28 +219,9 @@ function(opencsd_stage_shared_libs target)
         set_property(GLOBAL PROPERTY OPENCSD_STAGE_SHARED_LIB_CLEAN_REGISTERED TRUE)
     endif()
 
-    foreach(shared_tgt IN ITEMS opencsd opencsd_c_api)
-        if(WIN32)
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${shared_tgt}>
-                    $<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_NAME:${shared_tgt}>
-                VERBATIM
-            )
-        else()
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${shared_tgt}>
-                    $<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_NAME:${shared_tgt}>
-                COMMAND ${CMAKE_COMMAND} -E cmake_symlink_library
-                    $<TARGET_FILE_NAME:${shared_tgt}>
-                    $<TARGET_SONAME_FILE_NAME:${shared_tgt}>
-                    $<TARGET_LINKER_FILE_NAME:${shared_tgt}>
-                WORKING_DIRECTORY $<TARGET_FILE_DIR:${target}>
-                VERBATIM
-            )
-        endif()
-    endforeach()
+    if(TARGET stage_shared_libs)
+        add_dependencies(${target} stage_shared_libs)
+    endif()
 endfunction()
 
 function(opencsd_add_test_executable target)
@@ -404,6 +385,42 @@ else()
         OUTPUT_NAME opencsd_c_api
     )
     opencsd_set_output_dirs(opencsd_c_api_static "lib")
+
+    if(OPENCSD_FULL_PROJECT_LAYOUT)
+        if(WIN32)
+            add_custom_target(stage_shared_libs
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${OPENCSD_BIN_OUT}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:opencsd>
+                    "${OPENCSD_BIN_OUT}/$<TARGET_FILE_NAME:opencsd>"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:opencsd_c_api>
+                    "${OPENCSD_BIN_OUT}/$<TARGET_FILE_NAME:opencsd_c_api>"
+                VERBATIM
+            )
+        else()
+            add_custom_target(stage_shared_libs
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${OPENCSD_BIN_OUT}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:opencsd>
+                    "${OPENCSD_BIN_OUT}/$<TARGET_FILE_NAME:opencsd>"
+                COMMAND ${CMAKE_COMMAND} -E cmake_symlink_library
+                    $<TARGET_FILE_NAME:opencsd>
+                    $<TARGET_SONAME_FILE_NAME:opencsd>
+                    $<TARGET_LINKER_FILE_NAME:opencsd>
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:opencsd_c_api>
+                    "${OPENCSD_BIN_OUT}/$<TARGET_FILE_NAME:opencsd_c_api>"
+                COMMAND ${CMAKE_COMMAND} -E cmake_symlink_library
+                    $<TARGET_FILE_NAME:opencsd_c_api>
+                    $<TARGET_SONAME_FILE_NAME:opencsd_c_api>
+                    $<TARGET_LINKER_FILE_NAME:opencsd_c_api>
+                WORKING_DIRECTORY "${OPENCSD_BIN_OUT}"
+                VERBATIM
+            )
+        endif()
+        add_dependencies(stage_shared_libs opencsd opencsd_c_api)
+    endif()
 
     add_custom_target(libs DEPENDS
         opencsd
