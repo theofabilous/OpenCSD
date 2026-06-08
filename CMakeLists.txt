@@ -92,10 +92,17 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
         )
         set(OPENCSD_LINK_FLAGS)
     else()
+        if(APPLE)
+            set(OPENCSD_LOGICAL_OP_FLAG)
+        else()
+            set(OPENCSD_LOGICAL_OP_FLAG
+                -Wlogical-op
+            )
+        endif()
         set(OPENCSD_C_FLAGS
             -Wall
             -Wno-switch
-            -Wlogical-op
+            ${OPENCSD_LOGICAL_OP_FLAG}
         )
         set(OPENCSD_CXX_FLAGS
             -Wall
@@ -104,12 +111,16 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
             -Wno-unused-variable
             -Wno-reorder
             -Wno-invalid-token-paste
-            -Wlogical-op
+            ${OPENCSD_LOGICAL_OP_FLAG}
             -fexceptions
         )
-        set(OPENCSD_LINK_FLAGS
-            -Wl,-z,defs
-        )
+        if(APPLE)
+            set(OPENCSD_LINK_FLAGS)
+        else()
+            set(OPENCSD_LINK_FLAGS
+                -Wl,-z,defs
+            )
+        endif()
     endif()
 else()
     set(OPENCSD_C_FLAGS)
