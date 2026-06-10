@@ -250,6 +250,9 @@ ocsd_err_t TrcPktDecodeEtmV4I::onProtocolConfig()
     m_range_cont_chk = (bool)(getComponentOpMode() & OCSD_OPFLG_CHK_RANGE_CONTINUE);
     m_br_check_no_thumb = (bool)(getComponentOpMode() & OCSD_OPFLG_N_UNCOND_CHK_NO_THUMB);
 
+    // if using timestamp markers - only allow TS after first arrives
+    m_permit_ts = !m_config->hasTSMarker();
+
     return err;
 }
 
@@ -306,7 +309,7 @@ void TrcPktDecodeEtmV4I::resetDecoder()
     m_P0_stack.delete_all();
     m_out_elem.resetElemStack();
     clearElemRes();
-    m_ete_first_ts_marker = false;
+    m_permit_ts = (m_config == 0) || !m_config->hasTSMarker();
     nextRangeCheckClear();
 
     // elements associated with data trace
@@ -531,7 +534,7 @@ ocsd_err_t TrcPktDecodeEtmV4I::decodePacket()
         }
         break;
 
-    case ETE_PKT_I_TS_MARKER:
+    case ETM4_PKT_I_TS_MARKER:
         {
             trace_marker_payload_t marker;
             marker.type = ELEM_MARKER_TS;
@@ -1246,9 +1249,6 @@ ocsd_err_t TrcPktDecodeEtmV4I::discardElements()
 ocsd_err_t TrcPktDecodeEtmV4I::processTS_CC_EventElem(TrcStackElem *pElem)
 {
     ocsd_err_t err = OCSD_OK;
-    // ignore ts for ETE if not seen first TS marker on systems that use this.
-    bool bPermitTS = !m_config->eteHasTSMarker() || m_ete_first_ts_marker;
-
     switch (pElem->getP0Type())
     {
         case P0_EVENT:
@@ -1262,7 +1262,7 @@ ocsd_err_t TrcPktDecodeEtmV4I::processTS_CC_EventElem(TrcStackElem *pElem)
         case P0_TS:
         {
             TrcStackElemParam *pParamElem = dynamic_cast<TrcStackElemParam *>(pElem);
-            if (pParamElem && bPermitTS)
+            if (pParamElem && m_permit_ts)
                 err = addElemTS(pParamElem, false);
         }
         break;
@@ -1278,7 +1278,7 @@ ocsd_err_t TrcPktDecodeEtmV4I::processTS_CC_EventElem(TrcStackElem *pElem)
         case P0_TS_CC:
         {
             TrcStackElemParam *pParamElem = dynamic_cast<TrcStackElemParam *>(pElem);
-            if (pParamElem && bPermitTS)
+            if (pParamElem && m_permit_ts)
                 err = addElemTS(pParamElem, true);
         }
         break;
@@ -1292,15 +1292,16 @@ ocsd_err_t TrcPktDecodeEtmV4I::processMarkerElem(TrcStackElem *pElem)
     ocsd_err_t err = OCSD_OK;
     TrcStackElemMarker *pMarkerElem = dynamic_cast<TrcStackElemMarker *>(pElem);
 
-    if (m_config->eteHasTSMarker() && (pMarkerElem->getMarker().type == ELEM_MARKER_TS))
-        m_ete_first_ts_marker = true;
+    if (!pMarkerElem)
+        return OCSD_ERR_INVALID_PARAM_TYPE;
 
+    if (!m_permit_ts && m_config->hasTSMarker() && (pMarkerElem->getMarker().type == ELEM_MARKER_TS))
+        m_permit_ts = true;
+
+    err = m_out_elem.addElemType(pElem->getRootIndex(), OCSD_GEN_TRC_ELEM_SYNC_MARKER);
     if (!err)
-    {
-        err = m_out_elem.addElemType(pElem->getRootIndex(), OCSD_GEN_TRC_ELEM_SYNC_MARKER);
-        if (!err)
-            m_out_elem.getCurrElem().setSyncMarker(pMarkerElem->getMarker());
-    }
+        m_out_elem.getCurrElem().setSyncMarker(pMarkerElem->getMarker());
+
     return err;
 }
 

@@ -179,7 +179,7 @@ private:
 
         // timestamping
     uint64_t m_timestamp;   // last broadcast global Timestamp.
-    bool m_ete_first_ts_marker;
+    bool m_permit_ts;       // true when timestamp elements may be emitted.
 
     // state and context 
     uint32_t m_context_id;              // most recent context ID

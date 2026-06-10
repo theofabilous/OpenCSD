@@ -314,6 +314,7 @@ void TrcPktProcEtmV4I::iPktNoPayload(const uint8_t lastByte)
         break;
 
     // these just need the packet type - no processing required.
+    case ETM4_PKT_I_TS_MARKER:
     case ETM4_PKT_I_COND_FLUSH:
     case ETM4_PKT_I_EXCEPT_RTN:
     case ETM4_PKT_I_TRACE_ON:
@@ -321,7 +322,12 @@ void TrcPktProcEtmV4I::iPktNoPayload(const uint8_t lastByte)
     case ETE_PKT_I_TRANS_ST:
     case ETE_PKT_I_TRANS_COMMIT:
     case ETM4_PKT_I_IGNORE:
-    default: break;
+        break;
+
+    // default to reserved to force all usage to be explicitly handled
+    default: 
+        iPktReserved(lastByte);
+        break;
     }
     m_process_state = SEND_PKT; // now just send it....
 }
@@ -1550,11 +1556,14 @@ void TrcPktProcEtmV4I::BuildIPacketTable()
         m_i_table[0x85+i].pptkFn   = &TrcPktProcEtmV4I::iPktAddrCtxt;
     }
 
-    // 0b1000 1000 - ETE 1.1 TS Marker. also ETMv4.6
+    // 0b1000 1000 - TS Marker
     if(m_config.FullVersion() >= 0x46)
     {
-        m_i_table[0x88].pkt_type = ETE_PKT_I_TS_MARKER;
-        m_i_table[0x88].pptkFn = &TrcPktProcEtmV4I::iPktNoPayload;
+        m_i_table[0x88].pkt_type = ETM4_PKT_I_TS_MARKER;
+        if (m_config.hasTSMarker())
+            m_i_table[0x88].pptkFn = &TrcPktProcEtmV4I::iPktNoPayload;
+        else
+            m_i_table[0x88].pptkFn = &TrcPktProcEtmV4I::iPktInvalidCfg;
     }
     // 0b1001 0000 to b1001 0010 - exact match addr
     for(int i = 0; i < 3; i++)

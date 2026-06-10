@@ -81,7 +81,7 @@ public:
     const bool hasCycleCountI() const;
     const bool hasRetStack() const;
     const uint8_t numEvents() const;
-    const bool eteHasTSMarker() const;
+    const bool hasTSMarker() const;
     
     typedef enum _condType {
         COND_PASS_FAIL,
@@ -256,9 +256,9 @@ inline const bool EtmV4Config::hasTrcExcpData() const
     return (bool)((m_cfg.reg_idr0 & 0x20000) == 0x20000);
 }
 
-inline const bool EtmV4Config::eteHasTSMarker() const
+inline const bool EtmV4Config::hasTSMarker() const
 {
-    return (FullVersion() >= 0x51) && ((m_cfg.reg_idr0 & 0x800000) == 0x800000);
+    return (FullVersion() >= 0x46) && ((m_cfg.reg_idr0 & 0x800000) == 0x800000);
 }
 
 inline const uint32_t EtmV4Config::TimeStampSize() const
