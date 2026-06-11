@@ -157,7 +157,10 @@ private:
     } instr_range_t;
 
     //!< follow instructions from the current address to a WP. true if good, false if memory cannot be accessed.
-    ocsd_err_t traceInstrToWP(instr_range_t& instr_range, WP_res_t& WPRes, const bool traceToAddrNext = false, const ocsd_vaddr_t nextAddrMatch = 0);
+    ocsd_err_t traceInstrToWP(instr_range_t& instr_range, WP_res_t& WPRes, 
+                              const bool traceToAddrNext = false,       // follow to address value
+                              const ocsd_vaddr_t nextAddrMatch = 0,     // address value
+                              const bool exceptionAddr = false);        // dealing with exception address
 
     inline const bool WPFound(WP_res_t res) const { return (res == WP_FOUND); };
     inline const bool WPNacc(WP_res_t res) const { return (res == WP_NACC); };

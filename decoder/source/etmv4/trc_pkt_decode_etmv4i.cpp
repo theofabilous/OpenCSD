@@ -1630,7 +1630,7 @@ ocsd_err_t TrcPktDecodeEtmV4I::processException()
             instr_range_t addr_range;
 
             // look for match to return address.
-            err = traceInstrToWP(addr_range, WPRes, true, excep_ret_addr);
+            err = traceInstrToWP(addr_range, WPRes, true, excep_ret_addr, true);
 
             if (err != OCSD_OK)
             {
@@ -2005,7 +2005,10 @@ void TrcPktDecodeEtmV4I::SetInstrInfoInAddrISA(const ocsd_vaddr_t addr_val, cons
 }
 
 // trace an instruction range to a waypoint - and set next address to restart from.
-ocsd_err_t TrcPktDecodeEtmV4I::traceInstrToWP(instr_range_t &range, WP_res_t &WPRes, const bool traceToAddrNext /*= false*/, const ocsd_vaddr_t nextAddrMatch /*= 0*/)
+ocsd_err_t TrcPktDecodeEtmV4I::traceInstrToWP(instr_range_t &range, WP_res_t &WPRes, 
+                                              const bool traceToAddrNext /*= false*/, 
+                                              const ocsd_vaddr_t nextAddrMatch /*= 0*/,
+                                              const bool exceptionAddr /*= false*/)
 {
     uint32_t opcode;
     uint32_t bytesReq;
@@ -2033,11 +2036,20 @@ ocsd_err_t TrcPktDecodeEtmV4I::traceInstrToWP(instr_range_t &range, WP_res_t &WP
             m_instr_info.instr_addr += m_instr_info.instr_size;
             range.num_instr++;
 
-            // either walking to match the next instruction address or a real watchpoint
+            // either walking to match the next instruction address or a real waypoint
             if (traceToAddrNext)
             {
-                if (m_instr_info.instr_addr == nextAddrMatch) 
-                    WPRes = WP_FOUND;
+                if (m_instr_info.instr_addr == nextAddrMatch)
+                    WPRes = WP_FOUND;                
+                else if (exceptionAddr && (m_instr_info.instr_size == 4))
+                {
+                    // exception return address can be address of instr interrupted + 2
+                    // rather than next instruction if partially executed restartable
+                    // 4 byte instruction e.g. vector  (ETM4.6 spec A.7.6)
+                    // we will consider this a match
+                    if (m_instr_info.instr_addr == (nextAddrMatch + 2))
+                        WPRes = WP_FOUND;
+                }
             }
             else if (m_instr_info.type != OCSD_INSTR_OTHER)
                 WPRes = WP_FOUND;
