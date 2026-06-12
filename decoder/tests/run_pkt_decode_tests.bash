@@ -57,12 +57,11 @@ declare -a test_dirs_decode=(
                               "bugfix-exact-match"
                               "itm_only_csformat"
                               "itm_only_raw"
-                              "v7m_svc_vector"
-                              "v8m_svc_vector"
                               "juno_r1_1"
                               "juno-ret-stck"
                               "juno-uname-001"
                               "juno-uname-002"
+                              "nmi_partial_exec_snapshot"
                               "Snowball"
                               "stm-issue-27"
                               "stm_only"
@@ -72,6 +71,8 @@ declare -a test_dirs_decode=(
                               "tc2-ptm-rstk-t32"
                               "test-file-mem-offsets"
                               "trace_cov_a15"
+                              "v7m_svc_vector"
+                              "v8m_svc_vector"
                             )
 
 

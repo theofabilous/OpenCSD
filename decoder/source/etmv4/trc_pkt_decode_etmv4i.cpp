@@ -2040,7 +2040,7 @@ ocsd_err_t TrcPktDecodeEtmV4I::traceInstrToWP(instr_range_t &range, WP_res_t &WP
             if (traceToAddrNext)
             {
                 if (m_instr_info.instr_addr == nextAddrMatch)
-                    WPRes = WP_FOUND;                
+                    WPRes = WP_FOUND; 
                 else if (exceptionAddr && (m_instr_info.instr_size == 4))
                 {
                     // exception return address can be address of instr interrupted + 2

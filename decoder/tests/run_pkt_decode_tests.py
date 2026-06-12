@@ -33,8 +33,7 @@ STANDARD_DECODE_TESTS = (
     "juno-ret-stck",
     "juno-uname-001",
     "juno-uname-002",
-    "v7m_svc_vector",
-    "v8m_svc_vector",
+    "nmi_partial_exec",
     "Snowball",
     "stm-issue-27",
     "stm_only",
@@ -44,6 +43,8 @@ STANDARD_DECODE_TESTS = (
     "tc2-ptm-rstk-t32",
     "test-file-mem-offsets",
     "trace_cov_a15",
+    "v7m_svc_vector",
+    "v8m_svc_vector",
 )
 
 ETE_DECODE_TESTS = (
