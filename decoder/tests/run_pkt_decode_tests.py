@@ -520,7 +520,7 @@ def list_available_tests(selected_suites: Sequence[str]) -> None:
             print(f"  {test_name}")
 
 
-def resolve_selected_suite(test_name: str, requested_suite: str) -> str:
+def resolve_selected_suite(test_name: str, requested_suite: str | None) -> str:
     in_standard = test_name in STANDARD_DECODE_TESTS
     in_ete = test_name in ETE_DECODE_TESTS
 
@@ -530,7 +530,7 @@ def resolve_selected_suite(test_name: str, requested_suite: str) -> str:
             "Use a test name from STANDARD_DECODE_TESTS or ETE_DECODE_TESTS."
         )
 
-    if requested_suite == "both":
+    if requested_suite is None:
         if in_standard and not in_ete:
             return "standard"
         if in_ete and not in_standard:
@@ -915,9 +915,8 @@ def parse_args(argv: Sequence[str]) -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument(
         "--suite",
-        choices=("standard", "ete", "both"),
-        default="standard",
-        help="Select which test suite to run.",
+        choices=("standard", "ete"),
+        help="Run only the selected suite. Defaults to running both suites.",
     )
     parser.add_argument(
         "--use-installed",
@@ -1015,7 +1014,7 @@ def main(argv: Sequence[str]) -> int:
     results_suffix = None if args.diff_only else (args.results_suffix or default_results_suffix())
     diff_requested = args.diff_only or args.diff_previous or bool(diff_results_suffixes)
     selected_suite = args.suite
-    selected_suites = ("standard", "ete") if selected_suite == "both" else (selected_suite,)
+    selected_suites = ("standard", "ete") if selected_suite is None else (selected_suite,)
 
     if args.list_tests:
         list_available_tests(selected_suites)
@@ -1044,7 +1043,7 @@ def main(argv: Sequence[str]) -> int:
     else:
         print("Running diff-only comparison on existing results directories.")
 
-    selected_suites = ("standard", "ete") if selected_suite == "both" else (selected_suite,)
+    selected_suites = ("standard", "ete") if selected_suite is None else (selected_suite,)
     print(f"Selected suites: {', '.join(selected_suites)}")
     if args.test:
         print(f"Selected test: {args.test}")

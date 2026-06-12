@@ -76,6 +76,9 @@
     <Filter Include="Source Files\itm">
       <UniqueIdentifier>{d7a96e42-6f7b-41b7-8df8-c603fd2e6650}</UniqueIdentifier>
     </Filter>
+    <Filter Include="tests-files">
+      <UniqueIdentifier>{0162094e-5f5d-41c4-bb2d-b58a9e6d38f7}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\..\LICENSE">
@@ -110,6 +113,9 @@
     </None>
     <None Include="..\..\..\tests\auto-fdo\autofdo.md">
       <Filter>docs-files</Filter>
+    </None>
+    <None Include="..\..\..\tests\run_pkt_decode_tests.py">
+      <Filter>tests-files</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>
