@@ -94,8 +94,10 @@ pub fn build(b: *Build) !void {
     // major_only_filename: ?[]const u8,
     // name_only_filename: ?[]const u8,
 
-    // is this needed?
-    opencsd_dynamic_lib.dll_export_fns = true;
+    if (target.result.os.tag == .windows) {
+        // is this needed?
+        opencsd_dynamic_lib.dll_export_fns = true;
+    }
 
     const opencsd_c_api_lib = b.addLibrary(.{
         .name = "opencsd_c_api",
