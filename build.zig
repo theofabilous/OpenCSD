@@ -95,7 +95,7 @@ pub fn build(b: *Build) !void {
 
     const opencsd_c_api_lib = b.addLibrary(.{
         .name = "opencsd_c_api",
-        .root_module = opencsd,
+        .root_module = opencsd_c_api,
         .linkage = opencsd_linkage,
         .version = opencsd_version,
     });
