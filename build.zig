@@ -75,24 +75,18 @@ pub fn build(b: *Build) !void {
     }
 
     const opencsd_static_lib = b.addLibrary(.{
-        .name = "opencsd-static",
+        .name = "opencsd",
         .root_module = opencsd,
         .linkage = .static,
         .version = opencsd_version,
     });
 
     const opencsd_dynamic_lib = b.addLibrary(.{
-        .name = "opencsd-dynamic",
+        .name = "opencsd",
         .root_module = opencsd,
         .linkage = .dynamic,
         .version = opencsd_version,
     });
-
-    // TODO: do I need to tinker with any of the following fields?
-    // out_filename: []const u8,
-    // out_lib_filename: []const u8,
-    // major_only_filename: ?[]const u8,
-    // name_only_filename: ?[]const u8,
 
     if (target.result.os.tag == .windows) {
         // is this needed?
@@ -136,13 +130,11 @@ pub fn build(b: *Build) !void {
     }
 
     const install_opencsd = b.addInstallArtifact(desired_lib, .{
-        // TODO: need to handle renaming
         // i think enabling this matches how cmakelists does it?
         .dylib_symlinks = if (opencsd_linkage == .dynamic) true else null,
     });
 
     const install_opencsd_c_api = b.addInstallArtifact(opencsd_c_api_lib, .{
-        // TODO: need to handle renaming
         // i think enabling this matches how cmakelists does it?
         .dylib_symlinks = if (opencsd_linkage == .dynamic) true else null,
     });
