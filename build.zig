@@ -149,11 +149,8 @@ pub fn build(b: *Build) !void {
     install_opencsd_step.dependOn(&install_opencsd.step);
 
     for (opencsd_install_headers) |ih| {
-        const install_header = b.addInstallHeaderFile(
-            b.path(b.pathJoin(&.{ opencsd_headers_base, ih })),
-            ih,
-        );
-        install_opencsd_step.dependOn(&install_header.step);
+        const src = b.path(b.pathJoin(&.{ opencsd_headers_base, ih }));
+        desired_lib.installHeader(src, ih);
     }
 
     const install_opencsd_c_api_step = b.step("opencsd-c-api-lib", "Install OpenCSD C library");
