@@ -103,6 +103,11 @@ pub fn build(b: *Build) !void {
         .linkage = opencsd_linkage,
         .version = opencsd_version,
     });
+    opencsd_c_api_lib.installHeadersDirectory(
+        b.path("decoder/include/opencsd/c_api"),
+        "opencsd/c_api",
+        .{ .exclude_extensions = &.{ "cust_fact.h", "cust_impl.h" } },
+    );
 
     for ([_]*Build.Step.Compile{ opencsd_static_lib, opencsd_dynamic_lib, opencsd_c_api_lib }) |lib| {
         // TODO: cmakelists does `if (!apple) set(OPENCSD_LINK_FLAGS -Wl,-z,defs)`
@@ -153,14 +158,6 @@ pub fn build(b: *Build) !void {
 
     const install_opencsd_c_api_step = b.step("opencsd-c-api-lib", "Install OpenCSD C library");
     install_opencsd_c_api_step.dependOn(&install_opencsd_c_api.step);
-
-    for (opencsd_c_api_install_headers) |ih| {
-        const install_header = b.addInstallHeaderFile(
-            b.path(b.pathJoin(&.{ opencsd_headers_base, ih })),
-            ih,
-        );
-        install_opencsd_c_api_step.dependOn(&install_header.step);
-    }
 
     b.getInstallStep().dependOn(install_opencsd_step);
     b.getInstallStep().dependOn(install_opencsd_c_api_step);
@@ -234,10 +231,4 @@ const opencsd_install_headers: []const []const u8 = &.{
     "opencsd/etmv3/trc_pkt_types_etmv3.h",
     "opencsd/etmv4/trc_pkt_types_etmv4.h",
     "opencsd/ete/trc_pkt_types_ete.h",
-};
-
-const opencsd_c_api_install_headers: []const []const u8 = &.{
-    "opencsd/c_api/ocsd_c_api_types.h",
-    "opencsd/c_api/opencsd_c_api.h",
-    "opencsd/c_api/ocsd_c_api_custom.h",
 };
