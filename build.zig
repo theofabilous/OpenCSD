@@ -106,12 +106,10 @@ pub fn build(b: *Build) !void {
     );
 
     for ([_]*Build.Step.Compile{ opencsd_static_lib, opencsd_dynamic_lib, opencsd_c_api_lib }) |lib| {
-        // TODO: cmakelists does `if (!apple) set(OPENCSD_LINK_FLAGS -Wl,-z,defs)`
-        if (target.result.os.tag.isDarwin()) {
-            lib.linker_allow_shlib_undefined = true;
-        } else {
-            lib.link_z_defs = true;
-        }
+        // TODO: cmakelists does `if (!apple) set(OPENCSD_LINK_FLAGS -Wl,-z,defs)`.
+        // Enabling this on macOS doesn't seem to cause any problems, but I'm leaving this
+        // note here until I'm confident that it's ok
+        lib.link_z_defs = true;
     }
 
     const desired_lib = switch (opencsd_linkage) {
