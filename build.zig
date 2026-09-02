@@ -8,13 +8,23 @@ pub fn build(b: *Build) !void {
     const opencsd_linkage: std.builtin.LinkMode =
         b.option(std.builtin.LinkMode, "linkage", "OpenCSD library linkage") orelse .static;
 
-    // TODO: figure out a non-nuked way to get this from ocsd_if_version.h,
-    // or hand-sync and maybe add a comparison check step or smth
-    const opencsd_version: ?std.SemanticVersion = .{
+    // This must be manually updated, unlike the CMake build which reads the version file
+    // and sets it automatically. All main library artifacts depend on a check step which
+    // verifies that the versions match. A mismatch will fail the build.
+    const opencsd_version: std.SemanticVersion = .{
         .major = 0x1,
         .minor = 0x8,
         .patch = 0x3,
     };
+
+    const check_version = b.addCheckFile(b.path("decoder/include/opencsd/ocsd_if_version.h"), .{
+        .expected_matches = &.{
+            b.fmt("#define OCSD_VER_MAJOR 0x{X}", .{opencsd_version.major}),
+            b.fmt("#define OCSD_VER_MINOR 0x{X}", .{opencsd_version.minor}),
+            b.fmt("#define OCSD_VER_PATCH 0x{X}", .{opencsd_version.patch}),
+            b.fmt("#define OCSD_VER_STRING \"{f}\"", .{opencsd_version}),
+        },
+    });
 
     const opencsd = b.createModule(.{
         .root_source_file = null,
@@ -110,6 +120,8 @@ pub fn build(b: *Build) !void {
         // Enabling this on macOS doesn't seem to cause any problems, but I'm leaving this
         // note here until I'm confident that it's ok
         lib.link_z_defs = true;
+
+        lib.step.dependOn(&check_version.step);
     }
 
     const desired_lib = switch (opencsd_linkage) {
