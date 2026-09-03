@@ -190,6 +190,20 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
+
+    const example_mod = b.createModule(.{
+        .root_source_file = b.path("decoder/examples/example.zig"),
+        .optimize = .Debug,
+        .target = target,
+    });
+    example_mod.addImport("opencsd", opencsd_mod);
+    const example_exe = b.addExecutable(.{
+        .name = "example",
+        .root_module = example_mod,
+    });
+
+    const example_exe_step = b.step("example", "Build the example exe");
+    example_exe_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
 }
 
 const opencsd_sources: []const []const u8 = &.{
