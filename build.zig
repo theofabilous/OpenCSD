@@ -162,6 +162,34 @@ pub fn build(b: *Build) !void {
 
     b.getInstallStep().dependOn(install_opencsd_step);
     b.getInstallStep().dependOn(install_opencsd_c_api_step);
+
+    const wf = b.addWriteFiles();
+    const opencsd_c_api_all_h = wf.add(
+        "opencsd_c_api_all.h",
+        "#include <opencsd/c_api/opencsd_c_api.h>\n",
+    );
+
+    const opencsd_trc = b.addTranslateC(.{
+        .root_source_file = opencsd_c_api_all_h,
+        .optimize = optimize,
+        .target = target,
+    });
+    opencsd_trc.addIncludePath(b.path("decoder/source"));
+    opencsd_trc.addIncludePath(b.path("decoder/include"));
+    if (target.result.os.tag == .windows and opencsd_linkage == .static) {
+        // windows c-api consumers must define this macro when using a
+        // static build of the c-api to disable `__declspec(dllimport)`
+        opencsd_trc.defineCMacro("OCSD_USE_STATIC_C_API", "");
+    }
+    const opencsd_trc_mod = opencsd_trc.addModule("opencsd-c");
+    opencsd_trc_mod.linkLibrary(opencsd_c_api_lib);
+
+    const opencsd_mod = b.addModule("opencsd", .{
+        .root_source_file = b.path("decoder/source/zig/opencsd.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
 }
 
 const opencsd_sources: []const []const u8 = &.{
