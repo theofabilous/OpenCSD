@@ -3,6 +3,56 @@ const opencsd = @import("opencsd");
 
 const Io = std.Io;
 
+pub const TargetQuery = struct {
+    cpu_arch: Target.Cpu.Arch,
+    cpu_model: ?*const Target.Cpu.Model = null,
+    cpu_features_add: Target.Cpu.Feature.Set = .empty,
+    cpu_features_sub: Target.Cpu.Feature.Set = .empty,
+
+    pub const Family = enum(@typeInfo(Target.Cpu.Arch.Family).@"enum".tag_type) {
+        /// Includes thumb
+        arm = @intFromEnum(Target.Cpu.Arch.Family.arm),
+        aarch64 = @intFromEnum(Target.Cpu.Arch.Family.aarch64),
+    };
+
+    const Target = std.Target;
+
+    fn isValidArch(cpu_arch: Target.Cpu.Arch) bool {
+        return switch (cpu_arch.family()) {
+            .arm, .aarch64 => true,
+            else => false,
+        };
+    }
+
+    pub fn family(tq: TargetQuery) Family {
+        return @enumFromInt(@intFromEnum(tq.cpu_arch.family()));
+    }
+
+    /// Convert the `cpu_features_add` and `cpu_features_sub` fields into an
+    /// `--mattr=`-style value string.
+    pub fn toLlvmAttrs(tq: TargetQuery, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+        const all_features: []const Target.Cpu.Feature = switch (tq.family()) {
+            inline else => |arch_family| &@field(std.Target, @tagName(arch_family)).all_features,
+        };
+        for (0..2) |round| {
+            const prefix_char: u8, const set: *const std.Target.Cpu.Feature.Set = switch (round) {
+                0 => .{ '+', &tq.cpu_features_add },
+                1 => .{ '-', &tq.cpu_features_sub },
+                else => unreachable,
+            };
+            for (0.., all_features) |i, *feature| {
+                const llvm_name = feature.llvm_name orelse continue;
+                const index: std.Target.Cpu.Feature.Set.Index = @intCast(i);
+                if (set.isEnabled(index)) {
+                    if (list.items.len > 0) try list.append(gpa, ',');
+                    try list.append(gpa, prefix_char);
+                    try list.appendSlice(gpa, llvm_name);
+                }
+            }
+        }
+    }
+};
+
 const Context = struct {
     io: Io,
     allocator: std.mem.Allocator,
@@ -123,8 +173,7 @@ fn printTraceElem(
 
 const ObjdumpOptions = struct {
     exe: []const u8 = "objdump",
-    cpu: ?[]const u8,
-    attrs: []const []const u8 = &.{},
+    target_query: ?TargetQuery = null,
 };
 
 const Objdump = struct {
@@ -174,19 +223,20 @@ fn dumpChunk(
         try std.fmt.allocPrint(tmp_arena, "--stop-address={}", .{region.start_address+region.region_size}),
     });
 
-    if (options.cpu) |cpu| {
-        const arg = try std.fmt.allocPrint(tmp_arena, "--mcpu={s}", .{cpu});
-        try argv.append(tmp_arena, arg);
-    }
-
-    var attrs: std.ArrayList(u8) = .empty;
-    if (options.attrs.len > 0) {
-        try attrs.appendSlice(tmp_arena, "--mattr=");
-        for (0.., options.attrs) |i, attr| {
-            if (i > 0) try attrs.append(tmp_arena, ',');
-            try attrs.appendSlice(tmp_arena, attr);
+    if (options.target_query) |*tq| {
+        if (tq.cpu_model != null and tq.cpu_model.?.llvm_name != null) {
+            const arg = try std.fmt.allocPrint(tmp_arena, "--mcpu={s}", .{tq.cpu_model.?.llvm_name.?});
+            try argv.append(tmp_arena, arg);
         }
-        try argv.append(tmp_arena, attrs.items);
+
+        if (!tq.cpu_features_add.isEmpty() or !tq.cpu_features_sub.isEmpty()) {
+            var attrs: std.ArrayList(u8) = .empty;
+            try tq.toLlvmAttrs(&attrs, tmp_arena);
+            if (attrs.items.len > 0) {
+                try attrs.insertSlice(tmp_arena, 0, "--mattr=");
+                try argv.append(tmp_arena, attrs.items);
+            }
+        }
     }
 
     try argv.append(tmp_arena, elf_filepath);
@@ -365,8 +415,14 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var dump_options: ObjdumpOptions = .{
-        .cpu = "cortex-m33",
-        .attrs = &.{ "dsp", "+fp-armv8d16sp" },
+        .target_query = .{
+            .cpu_arch = .thumb,
+            .cpu_model = &std.Target.arm.cpu.cortex_m33,
+            .cpu_features_add = std.Target.arm.featureSet(&.{
+                .fp_armv8d16sp,
+                .dsp,
+            }),
+        },
     };
     if (init.environ_map.get("OBJDUMP")) |dump_exe| {
         dump_options.exe = dump_exe;
