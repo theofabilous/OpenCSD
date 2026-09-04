@@ -377,7 +377,13 @@ pub fn main(init: std.process.Init) !void {
     _ = &trace_protocol;
 
     const CSID = try dt.createDecoder(opencsd.BUILTIN_DCD_ETMV4I, opencsd.CREATE_FLG_FULL_DECODER, &trace_config);
-    _ = &CSID;
+
+    const print_packets = true;
+
+    if (print_packets) {
+        try opencsd.checkError(opencsd.dt_set_pkt_protocol_printer(dt.handle, CSID, 1));
+        try opencsd.checkError(opencsd.dt_set_raw_frame_printer(dt.handle, opencsd.DFRMTR_PACKED_RAW_OUT | opencsd.DFRMTR_UNPACKED_RAW_OUT));
+    }
 
     try opencsd.checkError(opencsd.dt_set_gen_elem_outfn(dt.handle, &printTraceElem, &context));
 
