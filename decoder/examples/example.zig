@@ -57,7 +57,7 @@ pub const TargetQuery = struct {
 const Context = struct {
     io: Io,
     allocator: std.mem.Allocator,
-    writer: *Io.Writer,
+    terminal: Io.Terminal,
     dump: Objdump = .empty,
     mapped_mem: []align(std.heap.page_size_min) const u8 = &.{},
     regions: []const opencsd.file_mem_region_t = &.{},
@@ -116,7 +116,7 @@ fn loggerPrint(
     const ctx: *const Context = @alignCast(@ptrCast(p_context.?));
     if (strp == null) return;
     const str: [:0]const u8 = if (str_len > 0) strp[0..@intCast(str_len):0] else std.mem.span(strp);
-    ctx.writer.writeAll(str) catch {};
+    ctx.terminal.writer.writeAll(str) catch {};
 }
 
 fn fillRegions(
@@ -151,17 +151,19 @@ fn printTraceElemInner(
     trcindex: opencsd.trc_index_t,
     chan: u8,
     raw_elem: *const opencsd.generic_trace_elem
-) Io.Writer.Error!void {
-    try ctx.writer.print("Idx:{}; TrcID:0x{X:02}; ", .{trcindex, chan});
-    const ws = try ctx.writer.writableSliceGreedy(@min(ctx.writer.buffer.len, 1024));
+) (Io.Writer.Error||Io.Terminal.SetColorError)!void {
+    const writer = ctx.terminal.writer;
+    defer ctx.terminal.setColor(.reset) catch {};
+    try writer.print("Idx:{}; TrcID:0x{X:02}; ", .{trcindex, chan});
+    const ws = try writer.writableSliceGreedy(@min(writer.buffer.len, 1024));
 
     const ret = opencsd.gen_elem_str(raw_elem, ws.ptr, @intCast(ws.len - 2));
     if (ret == opencsd.OK) {
         const n = std.mem.findScalar(u8, ws, 0).?;
         ws[n] = '\n';
-        ctx.writer.advance(n + 1);
+        writer.advance(n + 1);
     } else {
-        try ctx.writer.writeAll("[unable to create elem string]\n");
+        try writer.writeAll("[unable to create elem string]\n");
     }
 
     const elem: *const opencsd.GenericTraceElement = @alignCast(@ptrCast(raw_elem));
@@ -170,9 +172,9 @@ fn printTraceElemInner(
             switch (elem.last_instr_type) {
                 .BR, .BR_INDIRECT => {
                     if (elem.flag_bits.last_instr_exec == 1) {
-                        try ctx.writer.writeAll("  > branch taken\n");
+                        try writer.writeAll("  > branch taken\n");
                     } else {
-                        try ctx.writer.writeAll("  > branch NOT taken\n");
+                        try writer.writeAll("  > branch NOT taken\n");
                     }
                 },
                 else => {},
@@ -191,21 +193,34 @@ fn printTraceElemInner(
                 std.debug.assert(curr_addr >= elem.start_address);
                 const strp = chunk.strps[addr_index];
                 const line = std.mem.sliceTo(chunk.output[strp..], '\n');
-                try ctx.writer.print("0x{X:08}:\t{s}\n", .{ curr_addr, line });
+                try writer.print("0x{X:08}:\t{s}\n", .{ curr_addr, line });
             }
-            try ctx.writer.writeByte('\n');
+            try writer.writeByte('\n');
 
             const code = ctx.getCode(query).?;
             const instr_list = ctx.disasm(code, query) catch break :x;
             defer _ = capstone.cs_free(instr_list.ptr, instr_list.len);
+
+            var max_width: usize = 0;
+            for (instr_list) |*instr| max_width = @max(max_width, std.mem.sliceTo(&instr.mnemonic, 0).len);
+
             for (instr_list) |*instr| {
-                try ctx.writer.print("0x{X:08}  {s} {s}\n", .{
-                    instr.address,
-                    @as([*:0]const u8, @ptrCast(&instr.mnemonic)),
-                    @as([*:0]const u8, @ptrCast(&instr.op_str)),
-                });
+                try ctx.terminal.setColor(.dim);
+                try writer.print("0x{X:08}    ", .{ instr.address });
+                try ctx.terminal.setColor(.reset);
+                try ctx.terminal.setColor(.bold);
+                try ctx.terminal.setColor(.blue);
+                try writer.printValue("s", .{
+                    .width = max_width + 1,
+                    .alignment = .left,
+                    .fill = ' ',
+                }, std.mem.sliceTo(&instr.mnemonic, 0), 1);
+                try ctx.terminal.setColor(.reset);
+                try writer.writeByte(' ');
+                try writer.writeAll(std.mem.sliceTo(&instr.op_str, 0));
+                try writer.writeByte('\n');
             }
-            try ctx.writer.writeByte('\n');
+            try writer.writeByte('\n');
         },
         else => {},
     }
@@ -224,6 +239,7 @@ fn printTraceElem(
     };
     printTraceElemInner(ctx, trcindex, chan, elem) catch |err| switch (err) {
         error.WriteFailed => return opencsd.RESP_WARN_CONT,
+        error.Unexpected, error.Canceled => return opencsd.RESP_FATAL_SYS_ERR,
     };
     return opencsd.RESP_CONT;
 }
@@ -417,10 +433,28 @@ pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [2048]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = Io.File.stdout().writerStreaming(init.io, &stdout_buffer);
 
+    const envEnabled = struct {
+        fn call(opt_value: ?[]const u8) ?bool {
+            const value = opt_value orelse return null;
+            const true_values = [_][]const u8{ "1", "ON", "on", "YES", "yes" };
+            const false_values = [_][]const u8{ "0", "OFF", "off", "NO", "no" };
+            for (true_values) |tv| if (std.mem.eql(u8, value, tv)) return true;
+            for (false_values) |fv| if (std.mem.eql(u8, value, fv)) return false;
+            return null;
+        }
+    }.call;
+
+    const no_color: bool = envEnabled(init.environ_map.get("NOCOLOR")) orelse false;
+    const color_force: bool = envEnabled(init.environ_map.get("CLICOLOR_FORCE")) orelse false;
+    const terminal: Io.Terminal = .{
+        .mode = Io.Terminal.Mode.detect(io, .stdout(), no_color, color_force) catch .no_color,
+        .writer = &stdout_file_writer.interface,
+    };
+
     var context: Context = .{
         .allocator = init.gpa,
         .io = init.io,
-        .writer = &stdout_file_writer.interface,
+        .terminal = terminal,
     };
 
     try opencsd.checkError(opencsd.def_errlog_set_strprint_cb(dt.handle, @ptrCast(&context), &loggerPrint));
@@ -569,6 +603,6 @@ pub fn main(init: std.process.Init) !void {
         _ = dt.processData(.EOT);
     }
 
-    context.writer.flush() catch {};
+    context.terminal.writer.flush() catch {};
     try opencsd.checkError(ret);
 }
