@@ -1,0 +1,18 @@
+.{
+    .name = .opencsd,
+    .version = "1.8.3",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x65c76cb34f3305a7,
+
+    .dependencies = .{
+        .capstone = .{
+            .path = "../capstone",
+        },
+    },
+
+    // TODO
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+    },
+}

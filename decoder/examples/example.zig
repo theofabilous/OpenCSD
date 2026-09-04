@@ -1,5 +1,6 @@
 const std = @import("std");
 const opencsd = @import("opencsd");
+const capstone = @import("capstone");
 
 const Io = std.Io;
 
@@ -58,6 +59,53 @@ const Context = struct {
     allocator: std.mem.Allocator,
     writer: *Io.Writer,
     dump: Objdump = .empty,
+    mapped_mem: []align(std.heap.page_size_min) const u8 = &.{},
+    regions: []const opencsd.file_mem_region_t = &.{},
+    csh: capstone.csh = undefined,
+
+    const AddressRangeQuery = struct {
+        range: [2]u64,
+
+        pub fn init(range: [2]u64) AddressRangeQuery {
+            return .{ .range = range };
+        }
+    };
+
+    fn findRegionIndex(ctx: *const Context, query: AddressRangeQuery) ?usize {
+        return for (0.., ctx.regions) |i, r| {
+            if (r.start_address <= query.range[0] and query.range[1] <= r.start_address + r.region_size) {
+                break i;
+            }
+        } else null;
+    }
+
+    fn findDumpChunk(ctx: *const Context, query: AddressRangeQuery) ?*const Objdump.Chunk {
+        const region_index = ctx.findRegionIndex(query) orelse return null;
+        const chunk = &ctx.dump.chunks[region_index];
+        std.debug.assert(chunk.start <= query.range[0] and query.range[1] <= chunk.stop);
+        return chunk;
+    }
+
+    fn getCode(ctx: *const Context, query: AddressRangeQuery) ?[]const u8 {
+        const region_index = ctx.findRegionIndex(query) orelse return null;
+        const region = ctx.regions[region_index];
+        const query_size = query.range[1] - query.range[0];
+        const offs_from_start = query.range[0] - region.start_address;
+        return ctx.mapped_mem[region.file_offset + offs_from_start..][0..query_size];
+    }
+
+    fn disasm(ctx: *const Context, code: []const u8, query: AddressRangeQuery) ![]capstone.cs_insn {
+        var insn: ?[*]capstone.cs_insn = null;
+        const count = capstone.cs_disasm(ctx.csh, code.ptr, code.len, query.range[0], 0, &insn);
+        if (count == 0) {
+            std.log.err("capstone error during disasm: {s}", .{
+                @as([*:0]const u8, @ptrCast(capstone.cs_strerror(capstone.cs_errno(ctx.csh)))),
+            });
+            return error.CapstoneError;
+        }
+        const instr_list = (insn.?)[0..count];
+        return instr_list;
+    }
 };
 
 fn loggerPrint(
@@ -126,11 +174,8 @@ fn printTraceElemInner(
                     try ctx.writer.writeAll("    > branch NOT taken\n");
                 }
                 x: {
-                    const chunk: *const Objdump.Chunk = for (ctx.dump.chunks) |*chunk| {
-                        if (chunk.start <= elem.start_address and chunk.stop >= elem.end_address) {
-                            break chunk;
-                        }
-                    } else break :x;
+                    const query: Context.AddressRangeQuery = .init(.{elem.start_address, elem.end_address});
+                    const chunk = ctx.findDumpChunk(query) orelse break :x;
                     var addr_index: usize = for (0.., chunk.addrs) |i, offs| {
                         const addr: u64 = chunk.start + @as(u64, offs);
                         if (addr == elem.start_address) break i;
@@ -144,6 +189,18 @@ fn printTraceElemInner(
                         const strp = chunk.strps[addr_index];
                         const line = std.mem.sliceTo(chunk.output[strp..], '\n');
                         try ctx.writer.print("0x{X:08}:\t{s}\n", .{ curr_addr, line });
+                    }
+                    try ctx.writer.writeByte('\n');
+
+                    const code = ctx.getCode(query).?;
+                    const instr_list = ctx.disasm(code, query) catch break :x;
+                    defer _ = capstone.cs_free(instr_list.ptr, instr_list.len);
+                    for (instr_list) |*instr| {
+                        try ctx.writer.print("0x{X:08}\t{s} {s}\n", .{
+                            instr.address,
+                            @as([*:0]const u8, @ptrCast(&instr.mnemonic)),
+                            @as([*:0]const u8, @ptrCast(&instr.op_str)),
+                        });
                     }
                     try ctx.writer.writeByte('\n');
                 }
@@ -333,6 +390,11 @@ fn collectObjdump(
     return .{ .chunks = chunks_buffer };
 }
 
+fn csTry(e: capstone.cs_err) error{CapstoneError}!void {
+    if (e == capstone.CS_ERR_OK) return;
+    return error.CapstoneError;
+}
+
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
@@ -387,12 +449,47 @@ pub fn main(init: std.process.Init) !void {
 
     try opencsd.checkError(opencsd.dt_set_gen_elem_outfn(dt.handle, &printTraceElem, &context));
 
+    var csh: capstone.csh = undefined;
+    // NOTE: *not* setting CS_MODE_MCLASS fails the decoding of some instructions
+    // TODO: should capstone.CS_MODE_V8 be set here, too? it doesn't *seem* to cause
+    //       problems but idk
+    const csmode: c_uint = capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS;
+    if (capstone.cs_open(capstone.CS_ARCH_ARM, csmode, &csh) != capstone.CS_ERR_OK) {
+        return error.CapstoneOpen;
+    }
+    defer _ = capstone.cs_close(&csh);
+    context.csh = csh;
+
+    const elf_file = try Io.Dir.openFile(.cwd(), io, program_elf_path, .{
+        .mode = .read_only,
+        .allow_directory = false,
+    });
+    context.mapped_mem = mapped: {
+        const file_len = std.math.cast(
+            usize,
+            elf_file.length(io) catch |err| switch (err) {
+                error.PermissionDenied => unreachable, // not asking for PROT_EXEC
+                else => |e| return e,
+            },
+        ) orelse return error.Overflow;
+
+        break :mapped std.posix.mmap(
+            null,
+            file_len,
+            .{ .READ = true },
+            .{ .TYPE = .SHARED },
+            elf_file.handle,
+            0,
+        ) catch |err| switch (err) {
+            error.MappingAlreadyExists => unreachable, // not using FIXED_NOREPLACE
+            error.PermissionDenied => unreachable, // not asking for PROT_EXEC
+            else => |e| return e,
+        };
+    };
+    defer std.posix.munmap(context.mapped_mem);
+
     var regions: std.ArrayList(opencsd.file_mem_region_t) = .empty;
     {
-        const elf_file = try Io.Dir.openFile(.cwd(), io, program_elf_path, .{
-            .mode = .read_only,
-            .allow_directory = false,
-        });
         defer elf_file.close(io);
         try fillRegions(elf_file, io, arena, &regions);
         for (regions.items) |region| {
@@ -403,6 +500,7 @@ pub fn main(init: std.process.Init) !void {
             });
         }
     }
+    context.regions = regions.items;
     try opencsd.checkError(opencsd.dt_add_binfile_region_mem_acc(
         dt.handle,
         regions.items.ptr,

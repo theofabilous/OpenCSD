@@ -191,12 +191,20 @@ pub fn build(b: *Build) !void {
     });
     opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
 
+    const capstone = b.dependency("capstone", .{
+        .linkage = .static,
+        .@"supported-architectures" = &[_][]const u8{ "arm", "aarch64" },
+        .optimize = optimize,
+    });
+    const capstone_module = capstone.module("capstone");
+
     const example_mod = b.createModule(.{
         .root_source_file = b.path("decoder/examples/example.zig"),
         .optimize = .Debug,
         .target = target,
     });
     example_mod.addImport("opencsd", opencsd_mod);
+    example_mod.addImport("capstone", capstone_module);
     const example_exe = b.addExecutable(.{
         .name = "example",
         .root_module = example_mod,
