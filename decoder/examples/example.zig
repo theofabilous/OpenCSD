@@ -166,46 +166,46 @@ fn printTraceElemInner(
 
     const elem: *const opencsd.GenericTraceElement = @alignCast(@ptrCast(raw_elem));
     switch (elem.type) {
-        .INSTR_RANGE => switch (elem.last_instr_type) {
-            .BR, .BR_INDIRECT => {
-                if (elem.flag_bits.last_instr_exec == 1) {
-                    try ctx.writer.writeAll("    > branch taken\n");
-                } else {
-                    try ctx.writer.writeAll("    > branch NOT taken\n");
-                }
-                x: {
-                    const query: Context.AddressRangeQuery = .init(.{elem.start_address, elem.end_address});
-                    const chunk = ctx.findDumpChunk(query) orelse break :x;
-                    var addr_index: usize = for (0.., chunk.addrs) |i, offs| {
-                        const addr: u64 = chunk.start + @as(u64, offs);
-                        if (addr == elem.start_address) break i;
-                        if (addr > elem.start_address) break :x;
-                    } else break :x;
-
-                    while (addr_index < chunk.addrs.len) : (addr_index += 1) {
-                        const curr_addr = chunk.start + @as(u64, chunk.addrs[addr_index]);
-                        if (curr_addr >= elem.end_address) break;
-                        std.debug.assert(curr_addr >= elem.start_address);
-                        const strp = chunk.strps[addr_index];
-                        const line = std.mem.sliceTo(chunk.output[strp..], '\n');
-                        try ctx.writer.print("0x{X:08}:\t{s}\n", .{ curr_addr, line });
+        .INSTR_RANGE => x: {
+            switch (elem.last_instr_type) {
+                .BR, .BR_INDIRECT => {
+                    if (elem.flag_bits.last_instr_exec == 1) {
+                        try ctx.writer.writeAll("  > branch taken\n");
+                    } else {
+                        try ctx.writer.writeAll("  > branch NOT taken\n");
                     }
-                    try ctx.writer.writeByte('\n');
+                },
+                else => {},
+            }
+            const query: Context.AddressRangeQuery = .init(.{elem.start_address, elem.end_address});
+            const chunk = ctx.findDumpChunk(query) orelse break :x;
+            var addr_index: usize = for (0.., chunk.addrs) |i, offs| {
+                const addr: u64 = chunk.start + @as(u64, offs);
+                if (addr == elem.start_address) break i;
+                if (addr > elem.start_address) break :x;
+            } else break :x;
 
-                    const code = ctx.getCode(query).?;
-                    const instr_list = ctx.disasm(code, query) catch break :x;
-                    defer _ = capstone.cs_free(instr_list.ptr, instr_list.len);
-                    for (instr_list) |*instr| {
-                        try ctx.writer.print("0x{X:08}\t{s} {s}\n", .{
-                            instr.address,
-                            @as([*:0]const u8, @ptrCast(&instr.mnemonic)),
-                            @as([*:0]const u8, @ptrCast(&instr.op_str)),
-                        });
-                    }
-                    try ctx.writer.writeByte('\n');
-                }
-            },
-            else => {},
+            while (addr_index < chunk.addrs.len) : (addr_index += 1) {
+                const curr_addr = chunk.start + @as(u64, chunk.addrs[addr_index]);
+                if (curr_addr >= elem.end_address) break;
+                std.debug.assert(curr_addr >= elem.start_address);
+                const strp = chunk.strps[addr_index];
+                const line = std.mem.sliceTo(chunk.output[strp..], '\n');
+                try ctx.writer.print("0x{X:08}:\t{s}\n", .{ curr_addr, line });
+            }
+            try ctx.writer.writeByte('\n');
+
+            const code = ctx.getCode(query).?;
+            const instr_list = ctx.disasm(code, query) catch break :x;
+            defer _ = capstone.cs_free(instr_list.ptr, instr_list.len);
+            for (instr_list) |*instr| {
+                try ctx.writer.print("0x{X:08}  {s} {s}\n", .{
+                    instr.address,
+                    @as([*:0]const u8, @ptrCast(&instr.mnemonic)),
+                    @as([*:0]const u8, @ptrCast(&instr.op_str)),
+                });
+            }
+            try ctx.writer.writeByte('\n');
         },
         else => {},
     }
