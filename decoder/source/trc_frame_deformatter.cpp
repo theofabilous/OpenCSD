@@ -55,6 +55,12 @@ static const uint16_t FSYNC_START = 0xFFFF;
 static const uint16_t FSYNC_END = 0x7FFF;
 static const uint16_t HSYNC_PATTERN = 0x7FFF;        // LE host pattern for HSYNC
 
+template<class T>
+static T read_unaligned(const uint8_t *data) {
+    T dst{0};
+    std::memcpy(&dst, data, sizeof(T));
+    return dst;
+}
 
 TraceFmtDcdImpl::TraceFmtDcdImpl() : TraceComponent(DEFORMATTER_NAME),
     m_cfgFlags(0),
@@ -424,7 +430,7 @@ uint32_t TraceFmtDcdImpl::findfirstFSync()
     // last time had potential fsync at end of buffer
     if (m_b_fsync_chk_eo_buf == true)
     {
-        if (*((uint16_t*)(dataPtr)) == FSYNC_END) 
+        if (read_unaligned<uint16_t>(dataPtr) == FSYNC_END)
         {
             m_frame_synced = true;
         }
@@ -435,7 +441,7 @@ uint32_t TraceFmtDcdImpl::findfirstFSync()
 
     while (processed < (remain - 2))
     {
-        if (*((uint32_t *)(dataPtr)) == FSYNC_PATTERN)
+        if (read_unaligned<uint32_t>(dataPtr) == FSYNC_PATTERN)
         {
             m_frame_synced = true;
             break;
@@ -448,7 +454,7 @@ uint32_t TraceFmtDcdImpl::findfirstFSync()
     // HSYNC aligned 2 byte, allows small blocks or start of fsync at EOB
     if (!m_frame_synced && (remain == 2))
     {
-        if (*((uint16_t*)(dataPtr)) == FSYNC_START)
+        if (read_unaligned<uint16_t>(dataPtr) == FSYNC_START)
             m_b_fsync_chk_eo_buf = true;
     }
 
@@ -466,7 +472,7 @@ ocsd_err_t TraceFmtDcdImpl::checkForResetFSyncPatterns(uint32_t &f_sync_bytes)
 	while (check_for_fsync && (bytes_processed < m_in_block_size))
 	{
 		// look for consecutive fsyncs as padding or for reset downstream - both cases will reset downstream....
-		if (*((uint32_t *)(dataPtr)) == FSYNC_PATTERN)
+		if (read_unaligned<uint32_t>(dataPtr) == FSYNC_PATTERN)
 		{
 			dataPtr += sizeof(uint32_t);
             num_fsyncs++;
@@ -567,7 +573,7 @@ bool TraceFmtDcdImpl::extractFrame()
         {
             // was there an fsync start at the end of the last buffer?
             if (m_b_fsync_start_eob) {
-                if (*(uint16_t*)(dataPtr) != FSYNC_END)
+                if (read_unaligned<uint16_t>(dataPtr) != FSYNC_END)
                 {
                     // this means 0xFFFF followed by something else - invalid ID + ????
                     throw ocsdError(OCSD_ERR_SEV_ERROR, OCSD_ERR_DFMTR_BAD_FHSYNC, m_trc_curr_idx, "Bad FSYNC pattern before frame or invalid ID.(0x7F)");
@@ -583,7 +589,7 @@ bool TraceFmtDcdImpl::extractFrame()
             }
 
             // regular fsync checks
-            while ((buf_left >= 4) && (*((uint32_t*)(dataPtr)) == FSYNC_PATTERN))
+            while ((buf_left >= 4) && (read_unaligned<uint32_t>(dataPtr) == FSYNC_PATTERN))
             {
                 f_sync_bytes += 4;
                 dataPtr += 4;
@@ -593,7 +599,7 @@ bool TraceFmtDcdImpl::extractFrame()
             // handle possible part fsync at the end of a buffer
             if (buf_left == 2)
             {
-                if (*(uint16_t*)(dataPtr) == FSYNC_START)
+                if (read_unaligned<uint16_t>(dataPtr) == FSYNC_START)
                 {
                     f_sync_bytes += 2;
                     buf_left -= 2;
@@ -613,7 +619,7 @@ bool TraceFmtDcdImpl::extractFrame()
             m_ex_frm_data[m_ex_frm_n_bytes] = dataPtr[0];
             m_ex_frm_data[m_ex_frm_n_bytes + 1] = dataPtr[1];
 
-            data_pair_val = *((uint16_t*)(dataPtr));
+            data_pair_val = read_unaligned<uint16_t>(dataPtr);
 
             // check pair is not HSYNC
             if (data_pair_val == HSYNC_PATTERN)
