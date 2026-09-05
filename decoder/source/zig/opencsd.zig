@@ -84,11 +84,56 @@ pub const DecodeTree = extern struct {
     /// the trace byte position passed to the decoder is `file_reader.logicalPos()`.
     pub fn processFileReaderData(dt: DecodeTree, file_reader: *std.Io.File.Reader) !DataPath.Response {
         const reader = &file_reader.interface;
-        if (reader.bufferedLen() == 0) try reader.fillMore();
+        // TODO: seems like the buffer passed to processData must have a length according
+        // to the decode tree config (e.g. has_fsyncs == true => 4-byte multiple,
+        // has_hsyncs => 2-byte multiple, ...)
+        //
+        // I've encountered this error when passing buffers in 1024-byte chunks, so that
+        // means that the decoder processed a chunk whose length does not respect the
+        // n-byte multiple requirement, and so after advancing the position using the num
+        // processed bytes, we end up with an under-aligned buffer and the next process
+        // step complains
+        //
+        // This seems like a bug in openCSD, but it might also be due to a bad trace
+        // configuration on my end. Needs investigation
+        //
+        // TODO: this is not generally correct, len constraints depend on config
+        // TODO: add assertion/doc comment about reader underlying buffer length
+        //       constraints (prob should be a multiple of 16 to be safe)
+        // TODO: consider handling this differently, maybe just reduce the size down to previous
+        //       required multiple, and only fillMore() if the length is less than the multiple?
+        const required_align_mask = 0b11;
+        if (reader.bufferedLen() == 0 or (reader.bufferedLen() & required_align_mask) != 0) {
+            // TODO: if the buffered len is non-empty prior, maybe ensure that
+            // we added bytes? (if the len was 0 before, there is no need since
+            // fillMore() will return EndOfStream)
+            try reader.fillMore();
+        }
         const result = dt.processData(.traceData(.{
             .slice = reader.buffered(),
             .trace_index = @intCast(file_reader.logicalPos()),
         }));
+        if (result.num_processed_bytes == 0 and !result.response.isFatal()) x: {
+            const buffered_len = reader.bufferedLen();
+            if (buffered_len == 0) break :x;
+
+            // no data was processed, no fatal error occured, and the buffer is not empty.
+            // try to read some data now to avoid infinite loops, since subsequent calls
+            // to this function might not fill the buffer due to it being nonempty, and
+            // the decoder neither errors nor advances the stream
+            //
+            // not sure why this sort of situation occurs, might be a bug in openCSD. needs
+            // investigation.
+            try reader.fillMore();
+            if (reader.bufferedLen() == buffered_len) {
+                // if we didn't process any bytes, and we don't have any more data to read into
+                // the buffer, there is no longer anything to read
+                //
+                // TODO: add a different error for this condition, this is not exactly an EndOfStream,
+                // and could be handled differently by the caller
+                return error.EndOfStream;
+            }
+        }
         reader.toss(result.num_processed_bytes);
         return result.response;
     }
