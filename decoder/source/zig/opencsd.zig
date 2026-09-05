@@ -82,7 +82,11 @@ pub const DecodeTree = extern struct {
     ///
     /// Assumes the file reader's logical position follows the decoder's trace position, i.e.
     /// the trace byte position passed to the decoder is `file_reader.logicalPos()`.
-    pub fn processFileReaderData(dt: DecodeTree, file_reader: *std.Io.File.Reader) !DataPath.Response {
+    pub fn processFileReaderData(
+        dt: DecodeTree,
+        file_reader: *std.Io.File.Reader,
+        deformatter_flags: DeformatterFlags,
+    ) !DataPath.Response {
         const reader = &file_reader.interface;
         // TODO: seems like the buffer passed to processData must have a length according
         // to the decode tree config (e.g. has_fsyncs == true => 4-byte multiple,
@@ -102,15 +106,24 @@ pub const DecodeTree = extern struct {
         //       constraints (prob should be a multiple of 16 to be safe)
         // TODO: consider handling this differently, maybe just reduce the size down to previous
         //       required multiple, and only fillMore() if the length is less than the multiple?
-        const required_align_mask = 0b11;
-        if (reader.bufferedLen() == 0 or (reader.bufferedLen() & required_align_mask) != 0) {
+        const required_mul: usize =
+            if (deformatter_flags.has_hsyncs) 2
+            else if (deformatter_flags.has_fsyncs) 4
+            else 16;
+        if (reader.bufferedLen() < required_mul) {
+            @branchHint(.unlikely);
             // TODO: if the buffered len is non-empty prior, maybe ensure that
             // we added bytes? (if the len was 0 before, there is no need since
             // fillMore() will return EndOfStream)
             try reader.fillMore();
         }
+        const corrected_len = reader.bufferedLen() & ~(required_mul-1);
+        if (corrected_len == 0) {
+            // TODO: make this error condition distinct from EndOfStream
+            return error.EndOfStream;
+        }
         const result = dt.processData(.traceData(.{
-            .slice = reader.buffered(),
+            .slice = reader.buffered()[0..corrected_len],
             .trace_index = @intCast(file_reader.logicalPos()),
         }));
         if (result.num_processed_bytes == 0 and !result.response.isFatal()) x: {

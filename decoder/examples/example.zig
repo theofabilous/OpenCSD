@@ -425,9 +425,10 @@ pub fn main(init: std.process.Init) !void {
     var ret: opencsd.err_t = opencsd.OK;
     _ = &ret;
 
-    const dt: opencsd.DecodeTree = try .create(.FRAME_FORMATTED, .{
+    const dfmt_flags: opencsd.DecodeTree.DeformatterFlags = .{
         .has_fsyncs = true,
-    });
+    };
+    const dt: opencsd.DecodeTree = try .create(.FRAME_FORMATTED, dfmt_flags);
     defer dt.destroy();
 
     var stdout_buffer: [2048]u8 = undefined;
@@ -581,7 +582,7 @@ pub fn main(init: std.process.Init) !void {
     var response: opencsd.DataPath.Response = .CONT;
     while (!trace_file_reader.atEnd()) {
         response = switch (response.classify()) {
-            .continue_processing => dt.processFileReaderData(&trace_file_reader) catch |err| switch (err) {
+            .continue_processing => dt.processFileReaderData(&trace_file_reader, dfmt_flags) catch |err| switch (err) {
                 error.EndOfStream => |e| {
                     // This *is* reachable -- looks like File.Reader doesn't fill in the .size field
                     // until it actually hits some sort of end-of-stream condition, so the `!atEnd()`
