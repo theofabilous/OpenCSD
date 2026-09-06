@@ -5,6 +5,11 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const want_debug_info: bool = switch (optimize) {
+        .Debug, .ReleaseSafe => true,
+        else => false,
+    };
+
     const opencsd_linkage: std.builtin.LinkMode =
         b.option(std.builtin.LinkMode, "linkage", "OpenCSD library linkage") orelse .static;
 
@@ -26,6 +31,23 @@ pub fn build(b: *Build) !void {
         },
     });
 
+    var common_cflags: std.ArrayList([]const u8) = .empty;
+    try common_cflags.appendSlice(b.allocator, &.{
+        "-Wall",
+        "-Wno-switch",
+        "-Wno-deprecated-declarations",
+        "-Wno-unused-variable",
+        "-Wno-reorder",
+        "-Wno-invalid-token-paste",
+        "-fexceptions",
+        "-Wlogical-op",
+    });
+    if (want_debug_info) {
+        // probably unnecessary, since zig probably forwards something like this for
+        // safety-checked modes, but it can't hurt, right?
+        try common_cflags.append(b.allocator, "-g");
+    }
+
     const opencsd = b.createModule(.{
         .root_source_file = null,
         .target = target,
@@ -35,16 +57,7 @@ pub fn build(b: *Build) !void {
     opencsd.addCSourceFiles(.{
         .files = opencsd_sources,
         .language = .cpp,
-        .flags = &.{
-            "-Wall",
-            "-Wno-switch",
-            "-Wno-deprecated-declarations",
-            "-Wno-unused-variable",
-            "-Wno-reorder",
-            "-Wno-invalid-token-paste",
-            "-fexceptions",
-            "-Wlogical-op",
-        },
+        .flags = common_cflags.items,
     });
 
     const opencsd_c_api = b.createModule(.{
@@ -57,16 +70,7 @@ pub fn build(b: *Build) !void {
     opencsd_c_api.addCSourceFiles(.{
         .files = opencsd_c_api_sources,
         .language = .cpp,
-        .flags = &.{
-            "-Wall",
-            "-Wno-switch",
-            "-Wno-deprecated-declarations",
-            "-Wno-unused-variable",
-            "-Wno-reorder",
-            "-Wno-invalid-token-paste",
-            "-fexceptions",
-            "-Wlogical-op",
-        },
+        .flags = common_cflags.items,
     });
 
     for ([_]*Build.Module{ opencsd, opencsd_c_api }) |mod| {
