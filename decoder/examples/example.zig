@@ -411,6 +411,69 @@ fn csTry(e: capstone.cs_err) error{CapstoneError}!void {
     return error.CapstoneError;
 }
 
+pub const CONFIGR = packed struct (u32) {
+    _res0: u1 = 0,
+    /// Instruction P0 field. Controls whether load and store instructions are traced
+    /// as P0 instructions.
+    ///
+    /// Requires TRCIDR0.INSTP0.
+    instp0: INSTP0,
+    /// Branch broadcast enable.
+    ///
+    /// Requires TRCIDR0.TRCBB.
+    bb: bool,
+    /// Enable cycle counting in instruction trace.
+    /// See also TRCCCCTLR for threshold value.
+    ///
+    /// Requires TRCIDR0.TRCCCI
+    cci: bool,
+    _res1: u1 = 0,
+    /// Enable context ID tracing.
+    ///
+    /// Requires TRCIDR2.CIDSIZE
+    cid: bool,
+    /// Enable VID tracing
+    vmid: bool,
+    cond: COND,
+    /// Global timestamp tracing
+    ts: bool,
+    /// Return stack tracing
+    rs: bool,
+    /// Q element enable
+    qe: QE,
+    /// VID selection control
+    vmidopt: u1,
+    /// Data address tracing
+    da: bool,
+    /// Data value tracing
+    dv: bool,
+    _: u14 = 0,
+
+    pub const QE = enum(u2) {
+        disabled = 0b00,
+        with_instruction_counts = 0b01,
+        with_and_without_instruction_counts = 0b11,
+    };
+
+    pub const INSTP0 = enum (u2) {
+        none = 0b00,
+        load = 0b01,
+        store = 0b10,
+        load_and_store = 0b11,
+    };
+
+    pub const COND = packed struct (u3) {
+        /// Conditional load instructions are traced
+        load: bool,
+        /// Conditional store instructions are traced
+        store: bool,
+        other: bool,
+
+        pub const all: COND = .{ .load = true, .store = true, .other = true };
+        pub const none: COND = .{ .load = false, .store = false, .other = false };
+    };
+};
+
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
@@ -460,6 +523,11 @@ pub fn main(init: std.process.Init) !void {
 
     try opencsd.checkError(opencsd.def_errlog_set_strprint_cb(dt.handle, @ptrCast(&context), &loggerPrint));
 
+    const configr = std.mem.zeroInit(CONFIGR, .{
+        .ts = true,
+        .bb = true,
+        .cci = true,
+    });
     const trace_config: opencsd.etmv4_cfg = .{
         .arch_ver = opencsd.c.ARCH_V8,
         .core_prof = opencsd.c.profile_CortexM,
@@ -469,6 +537,7 @@ pub fn main(init: std.process.Init) !void {
         .reg_idr9 = 0,
         .reg_idr12 = 1,
         .reg_idr13 = 0,
+        .reg_configr = @bitCast(configr),
     };
     const trace_protocol: opencsd.trace_protocol_t = opencsd.PROTOCOL_ETMV4I;
     _ = &trace_protocol;
