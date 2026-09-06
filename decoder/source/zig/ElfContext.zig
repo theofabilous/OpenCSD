@@ -87,20 +87,71 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
     }
 }
 
+/// "Tag_CPU_arch_profile states that the attributed entity requires the noted
+/// architecture profile. [...] Starting with architecture versions v8-A, v8-R and v8-M,
+/// the profile is represented by Tag_CPU_arch. For these architecture versions and any
+/// later versions, a value of 0 should be used for Tag_CPU_arch_profile."
+const AebiCpuArchProfile = enum(u8) {
+    na_or_implied_by_cpu_arch = 0,
+    /// Application profile
+    A = 'A',
+    /// Real-time profile
+    R = 'R',
+    /// Microcontroller profile
+    M = 'M',
+    /// Application or real-time profile
+    S = 'S',
+    _,
+};
+
+pub const AeabiCpuArch = enum(u8) {
+    pre_v4 = 0,
+    arm_v4 = 1,
+    arm_v4T = 2,
+    arm_v5T = 3,
+    arm_v5TE = 4,
+    arm_v5TEJ = 5,
+    arm_v6 = 6,
+    arm_v6KZ = 7,
+    arm_v6T2 = 8,
+    arm_v6K = 9,
+    arm_v7 = 10,
+    arm_v6_M = 11,
+    arm_v6S_M = 12,
+    arm_v7E_M = 13,
+    arm_v8_A = 14,
+    arm_v8_R = 15,
+    arm_v8_M_baseline = 16,
+    arm_v8_M_mainline = 17,
+    arm_v8_1_A = 18,
+    arm_v8_2_A = 19,
+    arm_v8_3_A = 20,
+    arm_v8_1_M_mainline = 21,
+    arm_v9_A = 22,
+    _,
+};
+
+const ArmAttributes = struct {
+    cpu_name: ?[:0]const u8 = null,
+    cpu_raw_name: ?[:0]const u8 = null,
+    cpu_arch: ?AeabiCpuArch = null,
+    cpu_arch_profile: ?AebiCpuArchProfile = null,
+    // this can be deduced from cpu_arch and/or cpu_name, right?
+    use_thumb: ?bool = null,
+    // this can be deduced from cpu_arch and/or cpu_name, right?
+    use_arm: ?bool = null,
+};
+
 /// https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst#id30
 const SHT_ARM_ATTRIBUTES: elf.SHT = @enumFromInt(0x70000003);
 
 /// https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst#5362top-level-structure-tags
-const AeabiAttributesSubSubSectionScope = enum(u8) {
-    file = 1,
-    section = 2,
-    symbol = 3,
-    _,
-};
-
 /// https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#id50
 /// https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#35attributes-summary-and-history
 const AeabiAttributeTag = enum(u64) {
+    file = 1,
+    section = 2,
+    symbol = 3,
     CPU_raw_name = 4,
     CPU_name = 5,
     CPU_arch = 6,
@@ -137,25 +188,23 @@ const AeabiAttributeTag = enum(u64) {
     _,
 
     pub fn valueEncoding(tag: AeabiAttributeTag) ValueEncoding {
-        return switch (tag) {
-            .CPU_raw_name, .CPU_name => .ntbs,
-            else => |t| {
-                const int = @intFromEnum(t);
-                if (int > 32) {
-                    // https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#id49
-                    const is_even = t & 1 == 0;
-                    return if (is_even) .uleb128 else .ntbs;
-                } else {
-                    return .uleb128;
-                }
-            },
+        const tagint = @intFromEnum(tag);
+        if (tagint > 32) {
+            // https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#id49
+            const is_even = tagint & 1 == 0;
+            return if (is_even) .uleb128 else .ntbs;
+        } else return switch (tag) {
+            .file, .section, .symbol => .scope_len,
+            .CPU_raw_name, .CPU_name, .TAG_compatibility => .ntbs,
+            else => .uleb128,
         };
     }
 
     pub const ValueEncoding = enum {
         uleb128,
-        // Nul-terminated byte string
+        /// Nul-terminated byte string
         ntbs,
+        scope_len,
     };
 };
 
@@ -215,19 +264,25 @@ fn parseBuildAttributesSubsection(
 
     while (r.seek < next_pos) {
         const subsub_start = r.seek;
-        const tag = try r.takeEnumNonexhaustive(AeabiAttributesSubSubSectionScope, ehdr.endian);
+        const scope_tag: AeabiAttributeTag = @enumFromInt(try r.takeByte());
         const subsub_len = try r.takeInt(u32, ehdr.endian);
         const next_subpos = subsub_start + subsub_len;
-        switch (tag) {
+        if (next_subpos > next_pos) return error.InvalidElfFile;
+        switch (scope_tag) {
             .file => {},
             // TODO: section/symbol level attrs?
-            //       note that "Tag_nodefaults" will have to be taken into account if
-            //       these are supported
+            //       - note that "Tag_nodefaults" will have to be taken into account if
+            //         these are supported
+            //       - note that these tags are deprecated by arm
             .section, .symbol => {
                 r.seek = next_subpos;
                 continue;
             },
-            _ => return error.InvalidElfFile,
+            else => return error.InvalidElfFile,
+        }
+        while (r.seek < next_subpos) {
+            const tag_int = try r.takeLeb128(@typeInfo(AeabiAttributeTag).@"enum".tag_type);
+            const tag: AeabiAttributeTag = @enumFromInt(tag_int);
         }
     }
 }
