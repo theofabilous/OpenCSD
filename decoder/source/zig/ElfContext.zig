@@ -239,35 +239,36 @@ fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap
         }
 
         while (r.bufferedLen() > 0) {
-            try parseBuildAttributesSubsection(&r, ehdr, mapped_mem);
+            const start_pos = r.seek;
+            const sectlen = try r.takeInt(u32, ehdr.endian);
+            // length includes length-field, and is followed by a null-terminated string
+            if (sectlen < 1 + @sizeOf(u32) or start_pos + sectlen > r.end) {
+                return error.InvalidElfFile;
+            }
+            const next_pos = start_pos + sectlen;
+            const vendor_name = try r.takeSentinel(0);
+            if (!std.mem.eql(u8, vendor_name, "aeabi")) {
+                r.seek = next_pos;
+                return;
+            }
+
+            var subreader: Io.Reader = .fixed(r.seek[start_pos..next_pos]);
+            try parseBuildAttributesSubSectionData(&subreader, ehdr);
         }
     }
 }
 
-fn parseBuildAttributesSubsection(
+fn parseBuildAttributesSubSectionData(
     r: *Io.Reader,
     ehdr: *const elf.Header,
     // mapped_mem: []align(std.heap.page_size_min) const u8
 ) !void {
-    const start_pos = r.seek;
-    const sectlen = try r.takeInt(u32, ehdr.endian);
-    // length includes length-field, and is followed by a null-terminated string
-    if (sectlen < 1 + @sizeOf(u32) or start_pos + sectlen > r.end) {
-        return error.InvalidElfFile;
-    }
-    const next_pos = start_pos + sectlen;
-    const vendor_name = try r.takeSentinel(0);
-    if (!std.mem.eql(u8, vendor_name, "aeabi")) {
-        r.seek = next_pos;
-        return;
-    }
-
-    while (r.seek < next_pos) {
+    while (r.bufferedLen() > 0) {
         const subsub_start = r.seek;
         const scope_tag: AeabiAttributeTag = @enumFromInt(try r.takeByte());
         const subsub_len = try r.takeInt(u32, ehdr.endian);
-        const next_subpos = subsub_start + subsub_len;
-        if (next_subpos > next_pos) return error.InvalidElfFile;
+        const next_subsubpos = subsub_start + subsub_len;
+        if (next_subsubpos > r.end) return error.InvalidElfFile;
         switch (scope_tag) {
             .file => {},
             // TODO: section/symbol level attrs?
@@ -275,12 +276,12 @@ fn parseBuildAttributesSubsection(
             //         these are supported
             //       - note that these tags are deprecated by arm
             .section, .symbol => {
-                r.seek = next_subpos;
+                r.seek = next_subsubpos;
                 continue;
             },
             else => return error.InvalidElfFile,
         }
-        while (r.seek < next_subpos) {
+        while (r.seek < next_subsubpos) {
             const tag_int = try r.takeLeb128(@typeInfo(AeabiAttributeTag).@"enum".tag_type);
             const tag: AeabiAttributeTag = @enumFromInt(tag_int);
         }
