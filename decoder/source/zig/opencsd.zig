@@ -57,28 +57,6 @@ pub const DecodeTree = extern struct {
         return result;
     }
 
-    /// Process a block of data using data buffered in `reader`. This should generally
-    /// only be used with fixed readers. `trc_index` corresponds to the offset of the
-    /// reader's *base* position within the trace data, i.e. `trc_index` indicates the
-    /// trace byte position of `reader.buffer[0]`. The actual trace position passed to the
-    /// decoder is `trc_index + reader.seek`.
-    ///
-    /// If the entirety of the trace data is held within a fixed reader, it can be
-    /// processed in full by calling this function in a loop (handling datapath responses
-    /// appropriately) with `trc_index` set to `0`.
-    ///
-    /// Advances the reader's seek position by the number of processed bytes.
-    /// Asserts `reader` has buffered data.
-    pub fn processReaderBufferedData(dt: DecodeTree, trc_index: trc_index_t, reader: *std.Io.Reader) DataPath.Response {
-        std.debug.assert(reader.bufferedLen() > 0);
-        const result = dt.processData(.traceData(.{
-            .slice = reader.buffered(),
-            .trace_index = trc_index + @as(trc_index_t, @intCast(reader.seek)),
-        }));
-        reader.toss(result.num_processed_bytes);
-        return result.response;
-    }
-
     /// Process some data sourced from the `file_reader`.
     ///
     /// Assumes the file reader's logical position follows the decoder's trace position, i.e.
