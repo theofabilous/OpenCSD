@@ -38,6 +38,10 @@ pub const DecodeTree = extern struct {
         return checkError(dt_remove_decoder(dt.handle, csid));
     }
 
+    /// Submit a data processing operation to the decoder.
+    ///
+    /// For .DATA operations, the data buffer length must respect the restrictions implied
+    /// by the deformatter flags. See `DeformatterFlags.requiredDataLengthAlignment`.
     pub fn processData(dt: DecodeTree, op: ProcessData) ProcessData.Result {
         var result: ProcessData.Result = .{
             .response = undefined,
@@ -67,30 +71,17 @@ pub const DecodeTree = extern struct {
         deformatter_flags: DeformatterFlags,
     ) !DataPath.Response {
         const reader = &file_reader.interface;
-        // TODO: seems like the buffer passed to processData must have a length according
-        // to the decode tree config (e.g. has_fsyncs == true => 4-byte multiple,
-        // has_hsyncs => 2-byte multiple, ...)
-        //
-        // I've encountered this error when passing buffers in 1024-byte chunks, so that
-        // means that the decoder processed a chunk whose length does not respect the
-        // n-byte multiple requirement, and so after advancing the position using the num
-        // processed bytes, we end up with an under-aligned buffer and the next process
-        // step complains
+        // I've encountered an improper data length alignment error when passing buffers
+        // in 1024-byte chunks, so that means that the decoder processed a chunk whose
+        // length does not respect the n-byte multiple requirement, and so after advancing
+        // the position using the num processed bytes, we end up with an under-aligned
+        // buffer and the next process step complains
         //
         // This seems like a bug in openCSD, but it might also be due to a bad trace
         // configuration on my end. Needs investigation
-        //
-        // TODO: this is not generally correct, len constraints depend on config
-        // TODO: add assertion/doc comment about reader underlying buffer length
-        //       constraints (prob should be a multiple of 16 to be safe)
-        // TODO: consider handling this differently, maybe just reduce the size down to previous
-        //       required multiple, and only fillMore() if the length is less than the multiple?
         const required_mul: usize = deformatter_flags.requiredDataLengthAlignment();
         if (reader.bufferedLen() < required_mul) {
             @branchHint(.unlikely);
-            // TODO: if the buffered len is non-empty prior, maybe ensure that
-            // we added bytes? (if the len was 0 before, there is no need since
-            // fillMore() will return EndOfStream)
             try reader.fillMore();
         }
         const corrected_len = reader.bufferedLen() & ~(required_mul-1);
@@ -113,6 +104,15 @@ pub const DecodeTree = extern struct {
             //
             // not sure why this sort of situation occurs, might be a bug in openCSD. needs
             // investigation.
+            //
+            // NOTE: I'm not 100% sure, but I believe this "infinite loop" situation
+            // occured when I had set the `.has_hsyncs=true` deformatter flag for a trace
+            // stream which did not have them, and the decoder was stalling on some
+            // trailing 2-byte chunk (technically suitably aligned due to the deformatter
+            // flags indicating hsyncs, but probably not actually valid data in the trace
+            // stream). If that was indeed the case, it was certainly a user-error, but
+            // possibly still indicative of an opencsd bug/limitation, so I feel like
+            // explicitly handling this makes sense.
             try reader.fillMore();
             if (reader.bufferedLen() == buffered_len) {
                 // if we didn't process any bytes, and we don't have any more data to read into
