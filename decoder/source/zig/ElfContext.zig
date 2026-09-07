@@ -101,11 +101,78 @@ pub fn deinit(ctx: *ElfContext, gpa: std.mem.Allocator) void {
     std.posix.munmap(ctx.mapped_mem);
 }
 
+pub fn setupMemoryAccessor(ctx: *const ElfContext, dt: opencsd.DecodeTree) !void {
+    for (ctx.regions) |region| {
+        try opencsd.checkError(opencsd.dt_add_buffer_mem_acc(
+            dt.handle,
+            region.start_address,
+            opencsd.MEM_SPACE_ANY,
+            ctx.mapped_mem + region.file_offset,
+            @intCast(region.region_size),
+        ));
+    }
+}
+
+pub fn removeMemoryAccessor(ctx: *const ElfContext, dt: opencsd.DecodeTree) void {
+    for (ctx.regions) |region| {
+        opencsd.checkError(opencsd.dt_remove_mem_acc(
+            dt.handle,
+            region.start_address,
+            opencsd.MEM_SPACE_ANY,
+        )) catch {};
+    }
+}
+
+pub const ArchVerCoreProfile = struct {
+    arch_ver: ?opencsd.arch_version_t = null,
+    core_profile: opencsd.core_profile_t = opencsd.c.profile_Unknown,
+};
+
+pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
+    if (ctx.header.machine == .AARCH64) {
+        return .{
+            .arch_ver = opencsd.c.ARCH_AA64,
+            .core_profile = opencsd.c.profile_Unknown,
+        };
+    }
+    std.debug.assert(ctx.header.machine == .ARM);
+    var info: ArchVerCoreProfile = .{};
+    if (ctx.arm_attributes.cpu_arch) |arch| {
+        info.arch_ver = switch (arch) {
+            .arm_v7, .arm_v7E_M => opencsd.ARCH_V7,
+            .arm_v8_A,
+            .arm_v8_R,
+            .arm_v8_M_baseline,
+            .arm_v8_M_mainline,
+            .arm_v8_1_A,
+            .arm_v8_2_A,
+            .arm_v8_3_A,
+            .arm_v8_1_M_mainline,
+            => opencsd.c.ARCH_V8,
+            else => null,
+        };
+    }
+    if (ctx.arm_attributes.cpu_arch_profile) |profile| {
+        info.core_profile = switch (profile) {
+            .A => opencsd.c.profile_CortexA,
+            .R => opencsd.c.profile_CortexR,
+            .M => opencsd.c.profile_CortexM,
+            // TODO: take cpu arch into account for `S`?
+            .S => opencsd.c.profile_CortexA,
+            else => x: {
+                const p = if (ctx.arm_attributes.cpu_arch) |arch| arch.getProfile() else null;
+                break :x p orelse opencsd.c.profile_Unknown;
+            },
+        };
+    }
+    return info;
+}
+
 /// "Tag_CPU_arch_profile states that the attributed entity requires the noted
 /// architecture profile. [...] Starting with architecture versions v8-A, v8-R and v8-M,
 /// the profile is represented by Tag_CPU_arch. For these architecture versions and any
 /// later versions, a value of 0 should be used for Tag_CPU_arch_profile."
-const AebiCpuArchProfile = enum(u8) {
+pub const AebiCpuArchProfile = enum(u8) {
     na_or_implied_by_cpu_arch = 0,
     /// Application profile
     A = 'A',
@@ -143,9 +210,27 @@ pub const AeabiCpuArch = enum(u8) {
     arm_v8_1_M_mainline = 21,
     arm_v9_A = 22,
     _,
+
+    pub fn getProfile(cpu_arch: AeabiCpuArch) ?AebiCpuArchProfile {
+        return switch (cpu_arch) {
+            .arm_v6_M => .M,
+            .arm_v6S_M => .M,
+            .arm_v7E_M => .M,
+            .arm_v8_A => .A,
+            .arm_v8_R => .R,
+            .arm_v8_M_baseline => .M,
+            .arm_v8_M_mainline => .M,
+            .arm_v8_1_A => .A,
+            .arm_v8_2_A => .A,
+            .arm_v8_3_A => .A,
+            .arm_v8_1_M_mainline => .M,
+            .arm_v9_A => .A,
+            else => null,
+        };
+    }
 };
 
-const ArmAttributes = struct {
+pub const ArmAttributes = struct {
     cpu_name: ?[:0]const u8 = null,
     cpu_raw_name: ?[:0]const u8 = null,
     cpu_arch: ?AeabiCpuArch = null,
