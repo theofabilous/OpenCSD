@@ -172,9 +172,55 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
 }
 
 fn openCapstoneHandle(header: *const elf.Header, arm_attrs: *const ArmAttributes) !capstone.csh {
-    const csarch: c_int, const csmode: c_uint = switch (header.machine) {
-        .AARCH64 => .{ capstone.CS_ARCH_AARCH64, capstone.CS_MODE_ARM },
+    const csarch: c_int = switch (header.machine) {
+        .AARCH64 => capstone.CS_ARCH_AARCH64,
+        .ARM => capstone.CS_ARCH_ARM,
+        else => unreachable,
+    };
+    const csmode: c_uint = switch (header.machine) {
+        .AARCH64 => capstone.CS_MODE_ARM,
         .ARM => arm: {
+            var bits: c_uint = 0;
+            if (arm_attrs.getProfile() == .M) {
+                bits |= capstone.CS_MODE_MCLASS;
+            }
+            if (arm_attrs.cpu_arch) |cpu_arch| switch (cpu_arch) {
+                .arm_v8_A,
+                .arm_v8_R,
+                .arm_v8_M_baseline,
+                .arm_v8_M_mainline,
+                .arm_v8_1_A,
+                .arm_v8_2_A,
+                .arm_v8_3_A,
+                .arm_v8_1_M_mainline,
+                => bits |= capstone.CS_MODE_V8,
+                // NOTE: there is a CS_MODE_V9, but it is for SPARC, not ARM
+                else => {},
+            };
+            const IsaUse = packed struct (u4) {
+                arm: Use,
+                thumb: Use,
+                const Use = enum (u2) { dont_use = 0, use = 1, unknown = 2 };
+            };
+            const isa_use: IsaUse = .{
+                .arm = if (arm_attrs.arm) |use| @enumFromInt(@intFromBool(use)) else .unknown,
+                .thumb = if (arm_attrs.use_thumb) |use| @enumFromInt(@intFromBool(use)) else .unknown,
+            };
+            bits |= switch (isa_use) {
+                .{ .arm = .use, .thumb = .dont_use },
+                .{ .arm = .use, .thumb = .unknown },
+                .{ .arm = .unknown, .thumb = .dont_use },
+                => capstone.CS_MODE_ARM,
+                .{ .thumb = .use, .arm = .dont_use },
+                .{ .thumb = .use, .arm = .unknown },
+                .{ .thumb = .unkown, .arm = .dont_use },
+                => capstone.CS_MODE_THUMB,
+                // TODO: try to guess arm/thumb mode using the arch, profile and cpu name
+                .{ .thumb = .unknown, .arm = .unknown } => return error.Unsupported,
+                // Dynamic arm/thumb mode switching logic not implemented
+                .{ .thumb = .use, .arm = .use } => return error.Unsupported,
+                .{ .thumb = .dont_use, .arm = .dont_use } => return error.InvalidElfFile,
+            };
         },
         else => unreachable,
     };
