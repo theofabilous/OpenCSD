@@ -12,6 +12,7 @@ pub const Region = opencsd.file_mem_region_t;
 header: elf.Header,
 mapped_mem: []align(std.heap.page_size_min) const u8,
 regions: []const Region,
+arm_attributes: ArmAttributes,
 csh: capstone.csh = undefined,
 
 pub const OpenOptions = struct {};
@@ -82,9 +83,22 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
         }
     }.call);
 
+    var arm_attrs: ArmAttributes = .{};
     if (header.machine == .ARM) {
-        try armParseBuildAttributes(&header, mapped_mem);
+        try armParseBuildAttributes(&header, mapped_mem, &arm_attrs);
     }
+
+    return .{
+        .header = header,
+        .mapped_mem = mapped_mem,
+        .regions = try regions.toOwnedSlice(gpa),
+        .arm_attributes = arm_attrs,
+    };
+}
+
+pub fn deinit(ctx: *ElfContext, gpa: std.mem.Allocator) void {
+    gpa.free(ctx.regions);
+    std.posix.munmap(ctx.mapped_mem);
 }
 
 /// "Tag_CPU_arch_profile states that the attributed entity requires the noted
@@ -210,7 +224,11 @@ const AeabiAttributeTag = enum(u64) {
 
 // https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst#id34
 // https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#addendum-build-attributes
-fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap.page_size_min) const u8) !ArmAttributes {
+fn armParseBuildAttributes(
+    ehdr: *const elf.Header,
+    mapped_mem: []align(std.heap.page_size_min) const u8,
+    attrs: *ArmAttributes,
+) !void {
     std.debug.assert(ehdr.machine == .ARM);
     const shstrtab = shstrtab: {
         const offs = try std.math.mul(u64, ehdr.shstrndx, ehdr.shentsize);
@@ -220,8 +238,6 @@ fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap
         const shdr = try elf.takeSectionHeader(&r, ehdr.is_64, ehdr.endian);
         break :shstrtab mapped_mem[@intCast(shdr.sh_offset)..][0..@intCast(shdr.sh_size)];
     };
-
-    var attrs: ArmAttributes = .{};
 
     var shdr_it = ehdr.iterateSectionHeadersBuffer(mapped_mem);
     while (try shdr_it.next()) |shdr_raw| {
@@ -255,11 +271,9 @@ fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap
             }
 
             var subreader: Io.Reader = .fixed(r.seek[start_pos..next_pos]);
-            try parseBuildAttributesSubSectionData(&subreader, ehdr, &attrs);
+            try parseBuildAttributesSubSectionData(&subreader, ehdr, attrs);
         }
     }
-
-    return attrs;
 }
 
 fn parseBuildAttributesSubSectionData(
