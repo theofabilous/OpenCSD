@@ -110,7 +110,7 @@ pub fn setupMemoryAccessor(ctx: *const ElfContext, dt: opencsd.DecodeTree) !void
             dt.handle,
             region.start_address,
             opencsd.MEM_SPACE_ANY,
-            ctx.mapped_mem + region.file_offset,
+            ctx.mapped_mem.ptr + region.file_offset,
             @intCast(region.region_size),
         ));
     }
@@ -142,7 +142,7 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
     var info: ArchVerCoreProfile = .{};
     if (ctx.arm_attributes.cpu_arch) |arch| {
         info.arch_ver = switch (arch) {
-            .arm_v7, .arm_v7E_M => opencsd.ARCH_V7,
+            .arm_v7, .arm_v7E_M => opencsd.c.ARCH_V7,
             .arm_v8_A,
             .arm_v8_R,
             .arm_v8_M_baseline,
@@ -168,7 +168,7 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
 
 pub fn openCapstoneHandle(ctx: *ElfContext) !void {
     const arm_attrs = &ctx.arm_attributes;
-    const csarch: c_int = switch (ctx.header.machine) {
+    const csarch: c_uint = switch (ctx.header.machine) {
         .AARCH64 => capstone.CS_ARCH_AARCH64,
         .ARM => capstone.CS_ARCH_ARM,
         else => unreachable,
@@ -199,7 +199,7 @@ pub fn openCapstoneHandle(ctx: *ElfContext) !void {
                 const Use = enum (u2) { dont_use = 0, use = 1, unknown = 2 };
             };
             const isa_use: IsaUse = .{
-                .arm = if (arm_attrs.arm) |use| @enumFromInt(@intFromBool(use)) else .unknown,
+                .arm = if (arm_attrs.use_arm) |use| @enumFromInt(@intFromBool(use)) else .unknown,
                 .thumb = if (arm_attrs.use_thumb) |use| @enumFromInt(@intFromBool(use)) else .unknown,
             };
             bits |= switch (isa_use) {
@@ -209,13 +209,14 @@ pub fn openCapstoneHandle(ctx: *ElfContext) !void {
                 => capstone.CS_MODE_ARM,
                 .{ .thumb = .use, .arm = .dont_use },
                 .{ .thumb = .use, .arm = .unknown },
-                .{ .thumb = .unkown, .arm = .dont_use },
+                .{ .thumb = .unknown, .arm = .dont_use },
                 => capstone.CS_MODE_THUMB,
                 // TODO: try to guess arm/thumb mode using the arch, profile and cpu name
                 .{ .thumb = .unknown, .arm = .unknown } => return error.Unsupported,
                 // Dynamic arm/thumb mode switching logic not implemented
                 .{ .thumb = .use, .arm = .use } => return error.Unsupported,
                 .{ .thumb = .dont_use, .arm = .dont_use } => return error.InvalidElfFile,
+                else => unreachable,
             };
             break :arm bits;
         },
@@ -231,16 +232,17 @@ pub fn openCapstoneHandle(ctx: *ElfContext) !void {
 }
 
 pub fn disassembleAddressRange(ctx: *const ElfContext, query: AddressRangeQuery) !?[]capstone.cs_insn {
+    const csh = ctx.csh.?;
     _, const region = ctx.findRegion(query) orelse return null;
     const query_size = query.range[1] - query.range[0];
     const offs_from_start = query.range[0] - region.start_address;
     const code = ctx.mapped_mem[region.file_offset + offs_from_start..][0..query_size];
     var insn: ?[*]capstone.cs_insn = null;
-    const count = capstone.cs_disasm(ctx.csh, code.ptr, code.len, query.range[0], 0, &insn);
+    const count = capstone.cs_disasm(csh, code.ptr, code.len, query.range[0], 0, &insn);
     if (count == 0) {
         // TODO: add (and use) a capstone error type instead of logging what went wrong
         std.log.err("capstone error during disasm: {s}", .{
-            @as([*:0]const u8, @ptrCast(capstone.cs_strerror(capstone.cs_errno(ctx.csh)))),
+            @as([*:0]const u8, @ptrCast(capstone.cs_strerror(capstone.cs_errno(csh)))),
         });
         return error.CapstoneDisassemblyFailed;
     }
@@ -375,7 +377,6 @@ const AeabiAttributeTag = enum(u64) {
     ARM_ISA_use = 8,
     THUMB_ISA_use = 9,
     FP_arch = 10,
-    VFP_arch = 10,
     WMMX_arch = 11,
     Advanced_SIMD_arch = 12,
     PCS_config = 13,
@@ -390,9 +391,7 @@ const AeabiAttributeTag = enum(u64) {
     ABI_FP_user_exceptions = 22,
     ABI_FP_number_model = 23,
     ABI_align_needed = 24,
-    ABI_align8_needed = 24,
     ABI_align_preserved = 25,
-    ABI_align8_preserved = 25,
     ABI_enum_size = 26,
     ABI_HardFP_use = 27,
     ABI_VFP_args = 28,
@@ -411,7 +410,7 @@ const AeabiAttributeTag = enum(u64) {
             return if (is_even) .uleb128 else .ntbs;
         } else return switch (tag) {
             .file, .section, .symbol => .scope_len,
-            .CPU_raw_name, .CPU_name, .TAG_compatibility => .ntbs,
+            .CPU_raw_name, .CPU_name, .compatibility => .ntbs,
             else => .uleb128,
         };
     }
@@ -445,12 +444,12 @@ fn armParseBuildAttributes(
     while (try shdr_it.next()) |shdr_raw| {
         const shdr: elf.Elf64.Shdr = @bitCast(shdr_raw);
         if (shdr.type != SHT_ARM_ATTRIBUTES) continue;
-        if (shdr.sh_name > shstrtab.len) return error.InvalidElfFile;
-        const name = std.mem.sliceTo(shstrtab[@intCast(shdr.sh_name)..], 0);
+        if (shdr.name > shstrtab.len) return error.InvalidElfFile;
+        const name = std.mem.sliceTo(shstrtab[@intCast(shdr.name)..], 0);
         if (!std.mem.eql(u8, name, ".ARM.attributes")) return error.InvalidElfFile;
-        if ((shdr.sh_flags & elf.SHF_COMPRESSED) != 0) return error.Unsupported;
-        if (shdr.sh_offset + shdr.sh_size > mapped_mem.len) return error.InvalidElfFile;
-        const section_data = mapped_mem[@intCast(shdr.sh_offset)..][0..@intCast(shdr.sh_size)];
+        if (shdr.flags.shf.COMPRESSED) return error.Unsupported;
+        if (shdr.offset + shdr.size > mapped_mem.len) return error.InvalidElfFile;
+        const section_data = mapped_mem[@intCast(shdr.offset)..][0..@intCast(shdr.size)];
 
         var r: Io.Reader = .fixed(section_data);
         const format_version = try r.takeByte();
@@ -472,7 +471,7 @@ fn armParseBuildAttributes(
                 return;
             }
 
-            var subreader: Io.Reader = .fixed(r.seek[start_pos..next_pos]);
+            var subreader: Io.Reader = .fixed(r.buffer[start_pos..next_pos]);
             try parseBuildAttributesSubSectionData(&subreader, ehdr, attrs);
         }
     }
