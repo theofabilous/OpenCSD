@@ -86,9 +86,6 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
     var arm_attrs: ArmAttributes = .{};
     if (header.machine == .ARM) {
         try armParseBuildAttributes(&header, mapped_mem, &arm_attrs);
-        if (arm_attrs.cpu_arch_profile == null and arm_attrs.cpu_arch != null) {
-            arm_attrs.cpu_arch_profile = arm_attrs.cpu_arch.?.getProfile();
-        }
     }
 
     return .{
@@ -155,17 +152,12 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
             else => null,
         };
     }
-    if (ctx.arm_attributes.cpu_arch_profile) |profile| {
+
+    if (ctx.arm_attributes.determineProfile()) |profile| {
         info.core_profile = switch (profile) {
             .A => opencsd.c.profile_CortexA,
             .R => opencsd.c.profile_CortexR,
             .M => opencsd.c.profile_CortexM,
-            // TODO: take cpu arch into account for `S`?
-            .S => opencsd.c.profile_CortexA,
-            // NOTE: we post-process the arm attributes in `open()` such that
-            //       a missing `cpu_arch_profile` is deduced from `cpu_arch`
-            //       if possible, no use in doing that again here
-            else => opencsd.c.profile_Unknown,
         };
     }
     return info;
@@ -181,7 +173,7 @@ fn openCapstoneHandle(header: *const elf.Header, arm_attrs: *const ArmAttributes
         .AARCH64 => capstone.CS_MODE_ARM,
         .ARM => arm: {
             var bits: c_uint = 0;
-            if (arm_attrs.getProfile() == .M) {
+            if (arm_attrs.determineProfile() == .M) {
                 bits |= capstone.CS_MODE_MCLASS;
             }
             if (arm_attrs.cpu_arch) |cpu_arch| switch (cpu_arch) {
@@ -304,7 +296,7 @@ pub const ArmAttributes = struct {
     // this can be deduced from cpu_arch and/or cpu_name, right?
     use_arm: ?bool = null,
 
-    pub fn getProfile(attrs: *const ArmAttributes) ?AebiCpuArchProfile.Known {
+    pub fn determineProfile(attrs: *const ArmAttributes) ?AebiCpuArchProfile.Known {
         const arch_profile = attrs.cpu_arch_profile orelse .na_or_implied_by_cpu_arch;
         return sw: switch (arch_profile) {
             .A => .A,
