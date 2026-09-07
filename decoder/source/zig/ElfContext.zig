@@ -210,7 +210,7 @@ const AeabiAttributeTag = enum(u64) {
 
 // https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst#id34
 // https://github.com/ARM-software/abi-aa/blob/main/addenda32/addenda32.rst#addendum-build-attributes
-fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap.page_size_min) const u8) !void {
+fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap.page_size_min) const u8) !ArmAttributes {
     std.debug.assert(ehdr.machine == .ARM);
     const shstrtab = shstrtab: {
         const offs = try std.math.mul(u64, ehdr.shstrndx, ehdr.shentsize);
@@ -220,6 +220,8 @@ fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap
         const shdr = try elf.takeSectionHeader(&r, ehdr.is_64, ehdr.endian);
         break :shstrtab mapped_mem[@intCast(shdr.sh_offset)..][0..@intCast(shdr.sh_size)];
     };
+
+    var attrs: ArmAttributes = .{};
 
     var shdr_it = ehdr.iterateSectionHeadersBuffer(mapped_mem);
     while (try shdr_it.next()) |shdr_raw| {
@@ -253,15 +255,17 @@ fn armParseBuildAttributes(ehdr: *const elf.Header, mapped_mem: []align(std.heap
             }
 
             var subreader: Io.Reader = .fixed(r.seek[start_pos..next_pos]);
-            try parseBuildAttributesSubSectionData(&subreader, ehdr);
+            try parseBuildAttributesSubSectionData(&subreader, ehdr, &attrs);
         }
     }
+
+    return attrs;
 }
 
 fn parseBuildAttributesSubSectionData(
     r: *Io.Reader,
     ehdr: *const elf.Header,
-    // mapped_mem: []align(std.heap.page_size_min) const u8
+    attrs: *ArmAttributes,
 ) !void {
     while (r.bufferedLen() > 0) {
         const subsub_start = r.seek;
@@ -284,6 +288,19 @@ fn parseBuildAttributesSubSectionData(
         while (r.seek < next_subsubpos) {
             const tag_int = try r.takeLeb128(@typeInfo(AeabiAttributeTag).@"enum".tag_type);
             const tag: AeabiAttributeTag = @enumFromInt(tag_int);
+            switch (tag) {
+                .CPU_name => attrs.cpu_name = try r.takeSentinel(0),
+                .CPU_raw_name => attrs.cpu_raw_name = try r.takeSentinel(0),
+                .CPU_arch => attrs.cpu_arch = @enumFromInt(try r.takeLeb128(u64)),
+                .CPU_arch_profile => attrs.cpu_arch_profile = @enumFromInt(try r.takeLeb128(u64)),
+                .ARM_ISA_use => attrs.use_arm = 0 != try r.takeLeb128(u8),
+                .THUMB_ISA_use => attrs.use_thumb = 0 != try r.takeLeb128(u8),
+                else => switch (tag.valueEncoding()) {
+                    .scope_len => return error.InvalidElfFile,
+                    .ntbs => _ = try r.discardDelimiterInclusive(0),
+                    .uleb128 => _ = try r.takeLeb128(u64),
+                },
+            }
         }
     }
 }
