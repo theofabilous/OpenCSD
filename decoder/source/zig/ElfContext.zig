@@ -140,18 +140,11 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
     }
     std.debug.assert(ctx.header.machine == .ARM);
     var info: ArchVerCoreProfile = .{};
-    if (ctx.arm_attributes.cpu_arch) |arch| {
-        info.arch_ver = switch (arch) {
-            .arm_v7, .arm_v7E_M => opencsd.c.ARCH_V7,
-            .arm_v8_A,
-            .arm_v8_R,
-            .arm_v8_M_baseline,
-            .arm_v8_M_mainline,
-            .arm_v8_1_A,
-            .arm_v8_2_A,
-            .arm_v8_3_A,
-            .arm_v8_1_M_mainline,
-            => opencsd.c.ARCH_V8,
+    if (ctx.arm_attributes.cpu_arch) |arch| arch: {
+        const arch_version = arch.getArchVersion() orelse break :arch;
+        info.arch_ver = switch (arch_version) {
+            .v7 => opencsd.c.ARCH_V7,
+            .v8 => opencsd.c.ARCH_V8,
             else => null,
         };
     }
@@ -180,19 +173,12 @@ pub fn openCapstoneHandle(ctx: *ElfContext) !void {
             if (arm_attrs.determineProfile() == .M) {
                 bits |= capstone.CS_MODE_MCLASS;
             }
-            if (arm_attrs.cpu_arch) |cpu_arch| switch (cpu_arch) {
-                .arm_v8_A,
-                .arm_v8_R,
-                .arm_v8_M_baseline,
-                .arm_v8_M_mainline,
-                .arm_v8_1_A,
-                .arm_v8_2_A,
-                .arm_v8_3_A,
-                .arm_v8_1_M_mainline,
-                => bits |= capstone.CS_MODE_V8,
+            if (arm_attrs.cpu_arch) |cpu_arch| {
                 // NOTE: there is a CS_MODE_V9, but it is for SPARC, not ARM
-                else => {},
-            };
+                if (cpu_arch.getArchVersion() == .v8) {
+                    bits |= capstone.CS_MODE_V8;
+                }
+            }
             const IsaUse = packed struct (u4) {
                 arm: Use,
                 thumb: Use,
@@ -315,6 +301,39 @@ pub const AeabiCpuArch = enum(u8) {
     arm_v9_A = 22,
     _,
 
+    pub fn getArchVersion(cpu_arch: AeabiCpuArch) ?ArchVersion {
+        return switch (cpu_arch) {
+            .pre_v4 => .pre_v4,
+            .arm_v4, .arm_v4T => .v4,
+            .arm_v5T, .arm_v5TE, .arm_v5TEJ => .v5,
+            .arm_v6,
+            .arm_v6KZ,
+            .arm_v6T2,
+            .arm_v6K,
+            => .v6,
+            // TODO: it's possible that v6-M could be considered ~v7, since it was
+            // introduced after v7 and is said to support a subset of v7-M. its also
+            // upward compatible with v7-M.
+            //
+            // I mention this because openCSD has no "V6" architecture option, but it does
+            // have one for V7, and so there's a possibility that using the V7 option for
+            // these architectures would be "more correct"... maybe. idk
+            .arm_v6_M, .arm_v6S_M => .v6,
+            .arm_v7, .arm_v7E_M => .v7,
+            .arm_v8_A,
+            .arm_v8_R,
+            .arm_v8_M_baseline,
+            .arm_v8_M_mainline,
+            .arm_v8_1_A,
+            .arm_v8_2_A,
+            .arm_v8_3_A,
+            .arm_v8_1_M_mainline,
+            => .v8,
+            .arm_v9_A =>.v9,
+            _ => null,
+        };
+    }
+
     pub fn getProfile(cpu_arch: AeabiCpuArch) ?AebiCpuArchProfile {
         return switch (cpu_arch) {
             .arm_v6_M => .M,
@@ -332,6 +351,18 @@ pub const AeabiCpuArch = enum(u8) {
             else => null,
         };
     }
+
+    pub const ArchVersion = enum(u8) {
+        v4 = 4,
+        v5 = 5,
+        v6 = 6,
+        v7 = 7,
+        v8 = 8,
+        v9 = 9,
+        _,
+
+        pub const pre_v4: ArchVersion = @enumFromInt(3);
+    };
 };
 
 pub const ArmAttributes = struct {
