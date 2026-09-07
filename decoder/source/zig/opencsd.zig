@@ -85,10 +85,7 @@ pub const DecodeTree = extern struct {
         //       constraints (prob should be a multiple of 16 to be safe)
         // TODO: consider handling this differently, maybe just reduce the size down to previous
         //       required multiple, and only fillMore() if the length is less than the multiple?
-        const required_mul: usize =
-            if (deformatter_flags.has_hsyncs) 2
-            else if (deformatter_flags.has_fsyncs) 4
-            else 16;
+        const required_mul: usize = deformatter_flags.requiredDataLengthAlignment();
         if (reader.bufferedLen() < required_mul) {
             @branchHint(.unlikely);
             // TODO: if the buffered len is non-empty prior, maybe ensure that
@@ -164,6 +161,13 @@ pub const DecodeTree = extern struct {
         unpacked_raw_out: bool = false,
         reset_on_4x_sync: bool = false,
         _: u26 = 0,
+
+        pub fn requiredDataLengthAlignment(df: DeformatterFlags) u5 {
+            if (df.has_hsyncs) return 2;
+            if (df.has_fsyncs) return 4;
+            if (df.frame_mem_align) return 16;
+            unreachable;
+        }
     };
 };
 
