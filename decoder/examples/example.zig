@@ -264,6 +264,12 @@ pub fn main(init: std.process.Init) !void {
     defer elf_context.deinit(init.gpa);
     const arch_info = elf_context.getArchVersionAndCoreProfile();
 
+    switch (elf_context.header.machine) {
+        .AARCH64 => std.log.debug("detected AARCH64", .{}),
+        .ARM => std.log.debug("detected ARM: {f}", .{ elf_context.arm_attributes }),
+        else => unreachable,
+    }
+
     var context: Context = .{
         .allocator = init.gpa,
         .io = init.io,
