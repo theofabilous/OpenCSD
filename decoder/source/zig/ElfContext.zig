@@ -86,6 +86,9 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
     var arm_attrs: ArmAttributes = .{};
     if (header.machine == .ARM) {
         try armParseBuildAttributes(&header, mapped_mem, &arm_attrs);
+        if (arm_attrs.cpu_arch_profile == null and arm_attrs.cpu_arch != null) {
+            arm_attrs.cpu_arch_profile = arm_attrs.cpu_arch.?.getProfile();
+        }
     }
 
     return .{
@@ -159,10 +162,10 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
             .M => opencsd.c.profile_CortexM,
             // TODO: take cpu arch into account for `S`?
             .S => opencsd.c.profile_CortexA,
-            else => x: {
-                const p = if (ctx.arm_attributes.cpu_arch) |arch| arch.getProfile() else null;
-                break :x p orelse opencsd.c.profile_Unknown;
-            },
+            // NOTE: we post-process the arm attributes in `open()` such that
+            //       a missing `cpu_arch_profile` is deduced from `cpu_arch`
+            //       if possible, no use in doing that again here
+            else => opencsd.c.profile_Unknown,
         };
     }
     return info;
