@@ -210,11 +210,29 @@ pub fn openCapstoneHandle(ctx: *ElfContext) !void {
     };
 
     var csh: capstone.csh = undefined;
-    if (capstone.cs_open(csarch, csmode, &csh) != capstone.CS_ERR_OK) {
-        return error.CapstoneOpenFailed;
-    }
+    try checkCapstoneError(capstone.cs_open(csarch, csmode, &csh));
     errdefer _ = capstone.cs_close(&csh);
     ctx.csh = csh;
+}
+
+pub const CapstoneError = std.mem.Allocator.Error || Io.UnexpectedError || error {
+    UnsupportedArchitecture,
+    UnsupportedMode,
+    UnsupportedOption,
+    InvalidArgument,
+};
+
+fn checkCapstoneError(err: capstone.cs_err) CapstoneError!void {
+    return switch (err) {
+        capstone.CS_ERR_OK => {},
+        capstone.CS_ERR_MEM => error.OutOfMemory,
+        capstone.CS_ERR_ARCH => error.UnsupportedArchitecture,
+        capstone.CS_ERR_HANDLE => error.InvalidArgument,
+        capstone.CS_ERR_CSH => error.InvalidArgument,
+        capstone.CS_ERR_MODE => error.UnsupportedMode,
+        capstone.CS_ERR_OPTION => error.UnsupportedOption,
+        else => error.Unexpected,
+    };
 }
 
 pub fn disassembleAddressRange(ctx: *const ElfContext, query: AddressRangeQuery) !?[]capstone.cs_insn {
@@ -226,11 +244,9 @@ pub fn disassembleAddressRange(ctx: *const ElfContext, query: AddressRangeQuery)
     var insn: ?[*]capstone.cs_insn = null;
     const count = capstone.cs_disasm(csh, code.ptr, code.len, query.range[0], 0, &insn);
     if (count == 0) {
-        // TODO: add (and use) a capstone error type instead of logging what went wrong
-        std.log.err("capstone error during disasm: {s}", .{
-            @as([*:0]const u8, @ptrCast(capstone.cs_strerror(capstone.cs_errno(csh)))),
-        });
-        return error.CapstoneDisassemblyFailed;
+        if (checkCapstoneError(capstone.cs_errno(csh))) |_| {
+            unreachable;
+        } else |err| return err;
     }
     const instr_list = (insn.?)[0..count];
     return instr_list;
@@ -245,6 +261,7 @@ pub fn findRegion(ctx: *const ElfContext, query: AddressRangeQuery) ?struct { us
 }
 
 pub const AddressRangeQuery = struct {
+    /// End-exclusive
     range: [2]u64,
 
     pub fn init(range: [2]u64) AddressRangeQuery {
