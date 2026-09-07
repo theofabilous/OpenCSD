@@ -13,7 +13,7 @@ header: elf.Header,
 mapped_mem: []align(std.heap.page_size_min) const u8,
 regions: []const Region,
 arm_attributes: ArmAttributes,
-csh: capstone.csh = undefined,
+csh: ?capstone.csh = null,
 
 pub const OpenOptions = struct {};
 
@@ -97,6 +97,9 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
 }
 
 pub fn deinit(ctx: *ElfContext, gpa: std.mem.Allocator) void {
+    if (ctx.csh) |*csh| {
+        _ = capstone.cs_close(csh);
+    }
     gpa.free(ctx.regions);
     std.posix.munmap(ctx.mapped_mem);
 }
@@ -163,13 +166,14 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
     return info;
 }
 
-fn openCapstoneHandle(header: *const elf.Header, arm_attrs: *const ArmAttributes) !capstone.csh {
-    const csarch: c_int = switch (header.machine) {
+pub fn openCapstoneHandle(ctx: *ElfContext) !void {
+    const arm_attrs = &ctx.arm_attributes;
+    const csarch: c_int = switch (ctx.header.machine) {
         .AARCH64 => capstone.CS_ARCH_AARCH64,
         .ARM => capstone.CS_ARCH_ARM,
         else => unreachable,
     };
-    const csmode: c_uint = switch (header.machine) {
+    const csmode: c_uint = switch (ctx.header.machine) {
         .AARCH64 => capstone.CS_MODE_ARM,
         .ARM => arm: {
             var bits: c_uint = 0;
@@ -213,10 +217,52 @@ fn openCapstoneHandle(header: *const elf.Header, arm_attrs: *const ArmAttributes
                 .{ .thumb = .use, .arm = .use } => return error.Unsupported,
                 .{ .thumb = .dont_use, .arm = .dont_use } => return error.InvalidElfFile,
             };
+            break :arm bits;
         },
         else => unreachable,
     };
+
+    var csh: capstone.csh = undefined;
+    if (capstone.cs_open(csarch, csmode, &csh) != capstone.CS_ERR_OK) {
+        return error.CapstoneOpenFailed;
+    }
+    errdefer _ = capstone.cs_close(&csh);
+    ctx.csh = csh;
 }
+
+pub fn disassembleAddressRange(ctx: *const ElfContext, query: AddressRangeQuery) !?[]capstone.cs_insn {
+    _, const region = ctx.findRegion(query) orelse return null;
+    const query_size = query.range[1] - query.range[0];
+    const offs_from_start = query.range[0] - region.start_address;
+    const code = ctx.mapped_mem[region.file_offset + offs_from_start..][0..query_size];
+    var insn: ?[*]capstone.cs_insn = null;
+    const count = capstone.cs_disasm(ctx.csh, code.ptr, code.len, query.range[0], 0, &insn);
+    if (count == 0) {
+        // TODO: add (and use) a capstone error type instead of logging what went wrong
+        std.log.err("capstone error during disasm: {s}", .{
+            @as([*:0]const u8, @ptrCast(capstone.cs_strerror(capstone.cs_errno(ctx.csh)))),
+        });
+        return error.CapstoneDisassemblyFailed;
+    }
+    const instr_list = (insn.?)[0..count];
+    return instr_list;
+}
+
+pub fn findRegion(ctx: *const ElfContext, query: AddressRangeQuery) ?struct { usize, Region } {
+    return for (0.., ctx.regions) |i, r| {
+        if (r.start_address <= query.range[0] and query.range[1] <= r.start_address + r.region_size) {
+            break .{ i, r };
+        }
+    } else null;
+}
+
+pub const AddressRangeQuery = struct {
+    range: [2]u64,
+
+    pub fn init(range: [2]u64) AddressRangeQuery {
+        return .{ .range = range };
+    }
+};
 
 /// "Tag_CPU_arch_profile states that the attributed entity requires the noted
 /// architecture profile. [...] Starting with architecture versions v8-A, v8-R and v8-M,

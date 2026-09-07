@@ -188,19 +188,20 @@ pub fn build(b: *Build) !void {
     const opencsd_trc_mod = opencsd_trc.addModule("opencsd-c");
     opencsd_trc_mod.linkLibrary(opencsd_c_api_lib);
 
-    const opencsd_mod = b.addModule("opencsd", .{
-        .root_source_file = b.path("decoder/source/zig/opencsd.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
-
     const capstone = b.dependency("capstone", .{
         .linkage = .static,
         .@"supported-architectures" = &[_][]const u8{ "arm", "aarch64" },
         .optimize = optimize,
     });
     const capstone_module = capstone.module("capstone");
+
+    const opencsd_mod = b.addModule("opencsd", .{
+        .root_source_file = b.path("decoder/source/zig/opencsd.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
+    opencsd_mod.addImport("capstone", capstone_module);
 
     const example_mod = b.createModule(.{
         .root_source_file = b.path("decoder/examples/example.zig"),
