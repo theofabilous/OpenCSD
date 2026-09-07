@@ -344,6 +344,20 @@ pub const ArmAttributes = struct {
     // this can be deduced from cpu_arch and/or cpu_name, right?
     use_arm: ?bool = null,
 
+    pub fn format(self: *const ArmAttributes, writer: *Io.Writer) Io.Writer.Error!void {
+        try writer.print("ArmAttributes(cpu=\"{?s}\"", .{ self.cpu_name });
+        if (self.cpu_raw_name) |cpu_raw_name| {
+            try writer.print("(\"{s}\")", .{ cpu_raw_name });
+        }
+        try writer.print(", arch={?}, profile={?}({?}), thumb={?}, arm={?})", .{
+            self.cpu_arch,
+            self.cpu_arch_profile,
+            self.determineProfile(),
+            self.use_thumb,
+            self.use_arm,
+        });
+    }
+
     pub fn determineProfile(attrs: *const ArmAttributes) ?AebiCpuArchProfile.Known {
         const arch_profile = attrs.cpu_arch_profile orelse .na_or_implied_by_cpu_arch;
         return sw: switch (arch_profile) {
