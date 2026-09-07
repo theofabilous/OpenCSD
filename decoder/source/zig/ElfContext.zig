@@ -171,6 +171,15 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
     return info;
 }
 
+fn openCapstoneHandle(header: *const elf.Header, arm_attrs: *const ArmAttributes) !capstone.csh {
+    const csarch: c_int, const csmode: c_uint = switch (header.machine) {
+        .AARCH64 => .{ capstone.CS_ARCH_AARCH64, capstone.CS_MODE_ARM },
+        .ARM => arm: {
+        },
+        else => unreachable,
+    };
+}
+
 /// "Tag_CPU_arch_profile states that the attributed entity requires the noted
 /// architecture profile. [...] Starting with architecture versions v8-A, v8-R and v8-M,
 /// the profile is represented by Tag_CPU_arch. For these architecture versions and any
@@ -186,6 +195,12 @@ pub const AebiCpuArchProfile = enum(u8) {
     /// Application or real-time profile
     S = 'S',
     _,
+
+    pub const Known = enum(u8) {
+        A = 'A',
+        R = 'R',
+        M = 'M',
+    };
 };
 
 pub const AeabiCpuArch = enum(u8) {
@@ -242,6 +257,21 @@ pub const ArmAttributes = struct {
     use_thumb: ?bool = null,
     // this can be deduced from cpu_arch and/or cpu_name, right?
     use_arm: ?bool = null,
+
+    pub fn getProfile(attrs: *const ArmAttributes) ?AebiCpuArchProfile.Known {
+        const arch_profile = attrs.cpu_arch_profile orelse .na_or_implied_by_cpu_arch;
+        return sw: switch (arch_profile) {
+            .A => .A,
+            .R => .R,
+            .M => .M,
+            .S => .A,
+            .na_or_implied_by_cpu_arch => {
+                const arch = attrs.cpu_arch orelse return null;
+                continue :sw arch.getProfile() orelse return null;
+            },
+            else => return null,
+        };
+    }
 };
 
 /// https://github.com/ARM-software/abi-aa/blob/main/aaelf32/aaelf32.rst#id30
