@@ -466,12 +466,12 @@ fn armParseBuildAttributes(
             }
             const next_pos = start_pos + sectlen;
             const vendor_name = try r.takeSentinel(0);
+            defer r.seek = next_pos;
             if (!std.mem.eql(u8, vendor_name, "aeabi")) {
-                r.seek = next_pos;
-                return;
+                continue;
             }
 
-            var subreader: Io.Reader = .fixed(r.buffer[start_pos..next_pos]);
+            var subreader: Io.Reader = .fixed(r.buffer[r.seek..next_pos]);
             try parseBuildAttributesSubSectionData(&subreader, ehdr, attrs);
         }
     }
