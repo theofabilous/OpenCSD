@@ -71,6 +71,9 @@ pub const DecodeTree = extern struct {
     /// - For other reader implementations, callers must maintain `trace_index` manually
     ///   using the number of processed bytes (returned in the result object) so that it
     ///   matches the logical position within the trace stream
+    ///
+    /// Asserts the reader's buffer capacity is at least twice as long as the minimum chunk
+    /// length required by the deformatter configuration.
     pub fn processReaderData(
         dt: DecodeTree,
         reader: *std.Io.Reader,
@@ -86,6 +89,7 @@ pub const DecodeTree = extern struct {
         // This seems like a bug in openCSD, but it might also be due to a bad trace
         // configuration on my end. Needs investigation
         const required_mul: usize = deformatter_flags.requiredDataLengthAlignment();
+        std.debug.assert(reader.buffer.len >= 2 * required_mul);
         if (reader.bufferedLen() < required_mul) {
             @branchHint(.unlikely);
             try reader.fillMore();
