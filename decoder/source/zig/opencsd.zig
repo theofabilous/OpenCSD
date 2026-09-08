@@ -69,7 +69,7 @@ pub const DecodeTree = extern struct {
         dt: DecodeTree,
         file_reader: *std.Io.File.Reader,
         deformatter_flags: DeformatterFlags,
-    ) !DataPath.Response {
+    ) ProcessData.Error!DataPath.Response {
         const reader = &file_reader.interface;
         // I've encountered an improper data length alignment error when passing buffers
         // in 1024-byte chunks, so that means that the decoder processed a chunk whose
@@ -84,18 +84,21 @@ pub const DecodeTree = extern struct {
             @branchHint(.unlikely);
             try reader.fillMore();
         }
+
+        // If the buffer was emtpy, fillMore() should have returned EndOfStream
+        std.debug.assert(reader.bufferedLen() != 0);
         const corrected_len = reader.bufferedLen() & ~(required_mul-1);
         if (corrected_len == 0) {
-            // TODO: make this error condition distinct from EndOfStream
-            return error.EndOfStream;
+            // There is *some* data left, but not enough for a frame
+            return error.TruncatedStream;
         }
         const result = dt.processData(.traceData(.{
             .slice = reader.buffered()[0..corrected_len],
             .trace_index = @intCast(file_reader.logicalPos()),
         }));
-        if (result.num_processed_bytes == 0 and !result.response.isFatal()) x: {
+        if (result.num_processed_bytes == 0 and !result.response.isFatal()) {
             const buffered_len = reader.bufferedLen();
-            if (buffered_len == 0) break :x;
+            std.debug.assert(buffered_len != 0);
 
             // no data was processed, no fatal error occured, and the buffer is not empty.
             // try to read some data now to avoid infinite loops, since subsequent calls
@@ -117,10 +120,7 @@ pub const DecodeTree = extern struct {
             if (reader.bufferedLen() == buffered_len) {
                 // if we didn't process any bytes, and we don't have any more data to read into
                 // the buffer, there is no longer anything to read
-                //
-                // TODO: add a different error for this condition, this is not exactly an EndOfStream,
-                // and could be handled differently by the caller
-                return error.EndOfStream;
+                return error.DecoderStall;
             }
         }
         reader.toss(result.num_processed_bytes);
@@ -145,6 +145,16 @@ pub const DecodeTree = extern struct {
         pub const Result = struct {
             response: DataPath.Response,
             num_processed_bytes: u32,
+        };
+
+        pub const Error = std.Io.Reader.Error || error {
+            /// There is data remaining, but not enough for a full deformatter chunk,
+            /// possibly indicating a truncated trace stream or data corruption.
+            TruncatedStream,
+            /// The decoder did not advance the trace index when processing data, and the
+            /// reader can not be filled any more (either due to the buffer being full of
+            /// unread data, or due to no more data remaining in the underlying stream).
+            DecoderStall,
         };
     };
 
