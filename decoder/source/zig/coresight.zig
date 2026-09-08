@@ -151,14 +151,27 @@ pub const Deformatter = struct {
             .hsync_fsync => hsync_bytes.len,
             .fsync => fsync_bytes.len,
         };
-        const tail_size_max = min_size - 1;
+        if (r.bufferedLen() < min_size) try r.fillMore();
         while (true) {
-            if (r.bufferedLen() < min_size) try r.fillMore();
             const buffered = r.buffered();
             if (std.mem.find(u8, buffered, hsync_bytes)) |pos| {
                 _ = pos;
             } else {
-                const trail_size = @min(buffered.len, fsync_bytes.len-1);
+                // As it stands, both unaligned modes (fsync and hsync+fsync) accept fsyncs,
+                // however the hsync+fsync mode allows shorter buffer lengths. hsync+fsync mode
+                // is such that the minimum buffer size can both be valid AND hold a potential
+                // fsync prefix.
+                //
+                // Keep a potential FSYNC/HSYNC byte prefix buffered before refilling the
+                // buffer if we didn't find any sync points.
+                //
+                // The `-1` on the `buffered.len` operand is used so that we can guarantee that
+                // the preserved byte sequence length is strictly less than the buffered length. Without
+                // this, we risk keeping an FSYNC prefix candidate buffered in a way that would prevent
+                // us from ever moving forward if HSYNC frames are enabled (0xFF_FF is a candidate, but
+                // also long enough to inhibit a buffer refill due to it being 2-bytes long). This
+                // is still correct though,
+                const trail_size = @min(buffered.len-1, fsync_bytes.len-1);
                 // TODO: ensure we don't risk looping forever if HSYNCs are enabled...
                 // i feel like theres a chance that if we have 0xFFFF at the end of our
                 // buffer, we'll keep those bytes, thereby satisfying the `min_size` requirement
@@ -169,16 +182,6 @@ pub const Deformatter = struct {
                 const keep = for (0..trail_size) |i| {
                     if (buffered[buffered.len - (i+1)] != 0xFF) break i;
                 } else trail_size;
-
-                // var keep = tail_size_max;
-                // while (keep > 0) : (keep -= 1) {
-                // }
-                // df.logical_position += (r.end - r.seek)
-                // r.seek = r.end - (1+tail_size_max);
-                // const tail = buffered[buffered.len-(1+tail_size_max)..];
-                // const n = for (0..tail_size_max) |i| {
-                //     tail[
-                // } else tail_size_max;
             }
         }
     }
