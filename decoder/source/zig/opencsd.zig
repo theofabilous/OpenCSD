@@ -111,21 +111,16 @@ pub const DecodeTree = extern struct {
             // to this function might not fill the buffer due to it being nonempty, and
             // the decoder neither errors nor advances the stream
             //
-            // not sure why this sort of situation occurs, might be a bug in openCSD. needs
-            // investigation.
-            //
-            // NOTE: I'm not 100% sure, but I believe this "infinite loop" situation
-            // occured when I had set the `.has_hsyncs=true` deformatter flag for a trace
-            // stream which did not have them, and the decoder was stalling on some
-            // trailing 2-byte chunk (technically suitably aligned due to the deformatter
-            // flags indicating hsyncs, but probably not actually valid data in the trace
-            // stream). If that was indeed the case, it was certainly a user-error, but
-            // possibly still indicative of an opencsd bug/limitation, so I feel like
-            // explicitly handling this makes sense.
+            // I believe this situation can occur when the deformatter flags indicate a
+            // smaller alignement requirement that what is actually implied by the trace
+            // stream (e.g. stream is 4-byte aligned, but flags indicate HSYNCs => 2-byte
+            // alignement). Decoder could stall on a trailing chunk which is incorrectly
+            // accepted by the deformatter (due to the flags) but too short to make up an
+            // actual proper frame in the underlying stream.
             try reader.fillMore();
             if (reader.bufferedLen() == buffered_len) {
                 // if we didn't process any bytes, and we don't have any more data to read into
-                // the buffer, there is no longer anything to read
+                // the buffer, the decoder is likely stalled and we can't do anything about it
                 return error.DecoderStall;
             }
         }
@@ -175,6 +170,11 @@ pub const DecodeTree = extern struct {
             /// The decoder did not advance the trace index when processing data, and the
             /// reader can not be filled any more (either due to the buffer being full of
             /// unread data, or due to no more data remaining in the underlying stream).
+            ///
+            /// The exact cause of this error condition is unclear. It may indicate an
+            /// erroneous decoder/deformatter configuration with respect to the data
+            /// stream, data corruption in the trace stream, or an internal bug/limitation
+            /// of OpenCSD.
             DecoderStall,
         };
     };
