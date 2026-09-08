@@ -480,6 +480,88 @@ pub const GenericTraceElement = extern struct {
     };
 };
 
+pub const FormatterFrame = extern struct {
+    chunks: [8]Chunk,
+
+    pub fn auxBit(ff: *const FormatterFrame, index: Chunk.Index) u1 {
+        const aux_bits = ff.chunks[Chunk.max_index].data;
+        return @truncate(aux_bits >> index);
+    }
+
+    pub const AuxIdBit = enum(u1) {
+        next_byte_for_old_id = 0,
+        next_byte_for_new_id = 1,
+    };
+
+    pub const Chunk = extern struct {
+        id_or_data: IdOrData,
+        data: u8,
+
+        pub const IdOrData = packed struct (u8) {
+            id: bool,
+            rest: u7,
+        };
+
+        pub const Index = u3;
+        const max_index = std.math.maxInt(Index);
+    };
+
+    pub const DataIterator = struct {
+        curr_id: u7,
+        frame: *const FormatterFrame,
+        index: u8,
+
+        pub const Item = struct {
+            id: u7,
+            data: []const u8,
+        };
+
+        pub fn init(id: u7, frame: *const FormatterFrame) DataIterator {
+            return .{
+                .curr_id = id,
+                .frame = frame,
+                .index = 0,
+            };
+        }
+
+        pub fn next(it: *DataIterator, buffer: *[2]u8) ?Item {
+            if (it.index > Chunk.max_index) return null;
+            defer it.index += 1;
+            const chunk_index: Chunk.Index = @truncate(it.index);
+            const chunk = it.frame.chunks[chunk_index];
+            const aux_bit = it.frame.auxBit(chunk_index);
+            const one_if_last = @intFromBool(chunk_index == Chunk.max_index);
+            // Always write the full 2-byte chunk, then adjust the returned item's slice
+            // length as needed
+            buffer[0..2].* = @as([2]u8, @bitCast(chunk));
+            if (chunk.id_or_data.id) {
+                const new_id = chunk.id_or_data.rest;
+                defer it.curr_id = new_id;
+                const aux_id: AuxIdBit = @enumFromInt(aux_bit);
+                return .{
+                    // For the last chunk, this has no meaning since the the data buffer
+                    // is empty
+                    .id = switch (aux_id) {
+                        .next_byte_for_old_id => it.curr_id,
+                        .next_byte_for_new_id => new_id,
+                    },
+                    .data = buffer[0..1-one_if_last],
+                };
+            } else {
+                // For data bytes, the aux bit corresponds to bit 0 of the data. The bit
+                // at that position must be 0, due to it being the id/data discriminator,
+                // and 0 indicates data, so the `or` here is fine.
+                buffer[0] |= aux_bit;
+                return .{
+                    .id = it.curr_id,
+                    .data = buffer[0..2-one_if_last],
+                };
+            }
+        }
+    };
+};
+
+
 pub const Error = error {
     FAIL,
     MEM,
