@@ -81,23 +81,22 @@ pub const DecodeTree = extern struct {
         trace_index: trc_index_t,
         deformatter_flags: DeformatterFlags,
     ) ProcessData.Error!ProcessData.Result {
-        // I've encountered an improper data length alignment error when passing buffers
-        // in 1024-byte chunks, so that means that the decoder processed a chunk whose
-        // length does not respect the n-byte multiple requirement, and so after advancing
-        // the position using the num processed bytes, we end up with an under-aligned
-        // buffer and the next process step complains
-        //
-        // This seems like a bug in openCSD, but it might also be due to a bad trace
-        // configuration on my end. Needs investigation
         const required_mul: usize = deformatter_flags.requiredDataLengthAlignment();
         std.debug.assert(reader.buffer.len >= 2 * required_mul);
         if (reader.bufferedLen() < required_mul) {
             @branchHint(.unlikely);
             try reader.fillMore();
         }
-
         // If the buffer was emtpy, fillMore() should have returned EndOfStream
         std.debug.assert(reader.bufferedLen() != 0);
+
+        // Note that the decoder does not necessarily always process data in chunk lengths
+        // that respect the data length alignment requirement (seems to only be the case
+        // when FSYNCs are enabled and HSYNCs are disabled). Thus, manual realignment may
+        // be necessary on occasion.
+        //
+        // See trc_frame_deformatter.cpp @ `TraceFmtDcdImpl::findfirstFSync()`
+        // See trc_frame_deformatter.cpp @ `TraceFmtDcdImpl::extractFrame()`
         const corrected_len = reader.bufferedLen() & ~(required_mul-1);
         if (corrected_len == 0) {
             // There is *some* data left, but not enough for a frame
@@ -108,20 +107,37 @@ pub const DecodeTree = extern struct {
             .trace_index = trace_index,
         }));
         if (result.num_processed_bytes == 0 and !result.response.isFatal()) {
+            @branchHint(.unlikely);
             const buffered_len = reader.bufferedLen();
             std.debug.assert(buffered_len != 0);
 
-            // no data was processed, no fatal error occured, and the buffer is not empty.
-            // try to read some data now to avoid infinite loops, since subsequent calls
+            // No data was processed, no fatal error occured, and the buffer is not empty.
+            // Try to read some data now to avoid infinite loops, since subsequent calls
             // to this function might not fill the buffer due to it being nonempty, and
-            // the decoder neither errors nor advances the stream
+            // the decoder neither errors nor advances the stream.
             //
-            // I believe this situation can occur when the deformatter flags indicate a
-            // smaller alignement requirement that what is actually implied by the trace
-            // stream (e.g. stream is 4-byte aligned, but flags indicate HSYNCs => 2-byte
-            // alignement). Decoder could stall on a trailing chunk which is incorrectly
-            // accepted by the deformatter (due to the flags) but too short to make up an
-            // actual proper frame in the underlying stream.
+            // This situation can occur if both HSYNCs and FSYNCs are enabled, and no sync
+            // points were found within the buffered data.
+            //
+            // The trace deformatter logic looks for FSYNCs in 2-byte chunks, but leaves
+            // the last 2 trailing bytes buffered and unprocessed if no sync was found. If
+            // only FSYNCs are enabled, this is not a problem because the next data
+            // processing step will either:
+            //
+            // - fail due to an unaligned buffer length, since there are exactly 2 bytes
+            //   buffered, or
+            // - succeed because the user has filled up the buffer some more to satisfy
+            //   alignment
+            //
+            // This is not the case if HSYNCs are enabled, because that implies a 2-byte alignement
+            // length requirement, so the decoder will not reject the data block if not refilled.
+            //
+            // AFAICT, there is no clean way for OpenCSD to communicate such conditions,
+            // so we handle this ourselves.
+            //
+            // See trc_frame_deformatter.cpp @ `TraceFmtDcdImpl::findfirstFSync()`
+            // See trc_frame_deformatter.cpp @ `TraceFmtDcdImpl::checkForSync()`
+            // See trc_frame_deformatter.cpp @ `TraceFmtDcdImpl::processTraceData()`.
             try reader.fillMore();
             if (reader.bufferedLen() == buffered_len) {
                 // if we didn't process any bytes, and we don't have any more data to read into
