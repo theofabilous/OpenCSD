@@ -157,31 +157,49 @@ pub const Deformatter = struct {
             if (std.mem.find(u8, buffered, hsync_bytes)) |pos| {
                 _ = pos;
             } else {
-                // As it stands, both unaligned modes (fsync and hsync+fsync) accept fsyncs,
-                // however the hsync+fsync mode allows shorter buffer lengths. hsync+fsync mode
-                // is such that the minimum buffer size can both be valid AND hold a potential
-                // fsync prefix.
-                //
                 // Keep a potential FSYNC/HSYNC byte prefix buffered before refilling the
-                // buffer if we didn't find any sync points.
-                //
-                // The `-1` on the `buffered.len` operand is used so that we can guarantee that
-                // the preserved byte sequence length is strictly less than the buffered length. Without
-                // this, we risk keeping an FSYNC prefix candidate buffered in a way that would prevent
-                // us from ever moving forward if HSYNC frames are enabled (0xFF_FF is a candidate, but
-                // also long enough to inhibit a buffer refill due to it being 2-bytes long). This
-                // is still correct though,
-                const trail_size = @min(buffered.len-1, fsync_bytes.len-1);
-                // TODO: ensure we don't risk looping forever if HSYNCs are enabled...
-                // i feel like theres a chance that if we have 0xFFFF at the end of our
-                // buffer, we'll keep those bytes, thereby satisfying the `min_size` requirement
-                // and bypassing the call to fillMore(). In that case we'll fail to find any sync
-                // bytes, and then land back here, keep the bytes buffered, and spin forever...
-                //
-                // Probably could be mitigated by reorganizing when/where the buffer is refilled
+                // buffer if we didn't find any sync points. The prefix size is at most
+                // len(FSYNC)-1, and of course bounded by the current buffer size.
+                const trail_size = @min(buffered.len, fsync_bytes.len-1);
                 const keep = for (0..trail_size) |i| {
                     if (buffered[buffered.len - (i+1)] != 0xFF) break i;
                 } else trail_size;
+
+                // Without this, we risk keeping an FSYNC prefix candidate buffered in a
+                // way that would prevent us from ever moving forward if HSYNC frames are
+                // enabled (0xFF_FF and 0xFF_FF_FF are candidates, but also long enough to
+                // inhibit a buffer refill due to them being >= 2 bytes long).
+                //
+                // Note that it is incorrect to mitigate this condition by capping the
+                // `trail_size` to `buffered.len-1` instead. Although it would guarantee
+                // that we move forward, it risks ignoring an FSYNC. Consider the
+                // following scenario:
+                //
+                // <-[...]---------------- underlying stream ----[...]->
+                //           <--- buffered --->
+                //           |                |
+                //   ... ... [ 0xFF 0xFF 0xFF ] 0x7F |... ...
+                //           |                       |
+                //           <-------- FSYNC -------->
+                //
+                // (Note that this also holds if only `[0xFF 0xFF]` is buffered)
+                //
+                // In this situation, the correct action is to *not* move forward, but to
+                // try to fill the buffer up some more. If that fails and/or nothing was
+                // added to the buffer, we *correctly* return with an error of some sort
+                // to indicate that we failed to synchronize (this function is only called
+                // when we are not synchronized). If it succeeds, we were at worst
+                // microscopically pessimistic about reader's available refill capacity.
+                if (keep == buffered.len) {
+                    @branchHint(.unlikely);
+                    try r.fillMore();
+                    if (r.bufferedLen() == buffered.len) {
+                        return error.EndOfStream;
+                    }
+                } else {
+                    r.seek += buffered.len - keep;
+                }
+                if (r.bufferedLen() < min_size) try r.fillMore();
             }
         }
     }
