@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const c = @import("opencsd-c");
 pub const ElfContext = @import("ElfContext.zig");
+pub const build_options = @import("options");
 
 pub const DecodeTree = extern struct {
     handle: *anyopaque,

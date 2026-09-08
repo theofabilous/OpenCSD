@@ -6,11 +6,11 @@
 
     .dependencies = .{
         .capstone = .{
-            .path = "../capstone",
+            .lazy = true,
+            .url = "git+https://github.com/allyourcodebase/capstone.git#586dd00c4fd1615f4af7e603376dd13b683a25aa",
+            .hash = "capstone-6.0.0-Alpha4-tmNUgQE9AABNw_9iAfvi1hPfRVFKQsw2bqWVXOeM7Kqz",
         },
     },
-
-    // TODO
     .paths = .{
         "build.zig",
         "build.zig.zon",

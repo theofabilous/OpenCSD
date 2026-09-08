@@ -13,6 +13,8 @@ pub fn build(b: *Build) !void {
     const opencsd_linkage: std.builtin.LinkMode =
         b.option(std.builtin.LinkMode, "linkage", "OpenCSD library linkage") orelse .static;
 
+    const enable_capstone = b.option(bool, "enable-capstone", "Enable capstone disassembly") orelse true;
+
     // This must be manually updated, unlike the CMake build which reads the version file
     // and sets it automatically. All main library artifacts depend on a check step which
     // verifies that the versions match. A mismatch will fail the build.
@@ -188,12 +190,9 @@ pub fn build(b: *Build) !void {
     const opencsd_trc_mod = opencsd_trc.addModule("opencsd-c");
     opencsd_trc_mod.linkLibrary(opencsd_c_api_lib);
 
-    const capstone = b.dependency("capstone", .{
-        .linkage = .static,
-        .@"supported-architectures" = &[_][]const u8{ "arm", "aarch64" },
-        .optimize = optimize,
-    });
-    const capstone_module = capstone.module("capstone");
+    const opt_capstone_mod: ?*Build.Module = if (enable_capstone) getCapstoneModule(b, target, optimize) else null;
+    const options = b.addOptions();
+    options.addOption(bool, "capstone_enabled", opt_capstone_mod != null);
 
     const opencsd_mod = b.addModule("opencsd", .{
         .root_source_file = b.path("decoder/source/zig/opencsd.zig"),
@@ -201,7 +200,8 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     opencsd_mod.addImport("opencsd-c", opencsd_trc_mod);
-    opencsd_mod.addImport("capstone", capstone_module);
+    opencsd_mod.addImport("options", options.createModule());
+    if (opt_capstone_mod) |m| opencsd_mod.addImport("capstone", m);
 
     const example_mod = b.createModule(.{
         .root_source_file = b.path("decoder/examples/example.zig"),
@@ -209,7 +209,6 @@ pub fn build(b: *Build) !void {
         .target = target,
     });
     example_mod.addImport("opencsd", opencsd_mod);
-    example_mod.addImport("capstone", capstone_module);
     const example_exe = b.addExecutable(.{
         .name = "example",
         .root_module = example_mod,
@@ -217,6 +216,45 @@ pub fn build(b: *Build) !void {
 
     const example_exe_step = b.step("example", "Build the example exe");
     example_exe_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
+}
+
+fn getCapstoneModule(b: *Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) ?*Build.Module {
+    const dep = b.lazyDependency("capstone", .{
+        .linkage = .static,
+        .@"supported-architectures" = &[_][]const u8{ "arm", "aarch64" },
+        .optimize = optimize,
+    }) orelse return null;
+    const capstone_lib = dep.artifact("capstone");
+
+    const upstream: *Build.Dependency = for (capstone_lib.root_module.include_dirs.items) |inc| {
+        switch (inc) {
+            .path, .path_system => |lp| switch (lp) {
+                .dependency => |d| break d.dependency,
+                else => continue,
+            },
+            else => continue,
+        }
+    } else {
+        std.log.err("Could not find transitive upstream capstone dependency", .{});
+        return null;
+    };
+
+    const translate_capstone = b.addTranslateC(.{
+        .root_source_file = upstream.path("include/capstone/capstone.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    translate_capstone.addIncludePath(upstream.path("include"));
+
+    translate_capstone.c_macros.ensureUnusedCapacity(capstone_lib.root_module.c_macros.items.len) catch @panic("OOM");
+    for (capstone_lib.root_module.c_macros.items) |macro| {
+        translate_capstone.c_macros.appendAssumeCapacity(std.mem.cutPrefix(u8, macro, "-D") orelse macro);
+    }
+    const translated_module = translate_capstone.addModule("capstone");
+    translated_module.linkLibrary(capstone_lib);
+
+    return translated_module;
 }
 
 const opencsd_sources: []const []const u8 = &.{

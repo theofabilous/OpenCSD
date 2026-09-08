@@ -1,6 +1,5 @@
 const std = @import("std");
 const opencsd = @import("opencsd");
-const capstone = @import("capstone");
 
 const Io = std.Io;
 
@@ -107,7 +106,7 @@ fn printTraceElemInner(
             }
             const query: opencsd.ElfContext.AddressRangeQuery = .init(.{elem.start_address, elem.end_address});
             const instr_list = (ctx.elf.disassembleAddressRange(query) catch null) orelse break :x;
-            defer _ = capstone.cs_free(instr_list.ptr, instr_list.len);
+            defer ctx.elf.freeCapstoneInstructions(instr_list);
             var max_width: usize = 0;
             for (instr_list) |*instr| max_width = @max(max_width, std.mem.sliceTo(&instr.mnemonic, 0).len);
 
@@ -149,11 +148,6 @@ fn printTraceElem(
         error.Unexpected, error.Canceled => return opencsd.RESP_FATAL_SYS_ERR,
     };
     return opencsd.RESP_CONT;
-}
-
-fn csTry(e: capstone.cs_err) error{CapstoneError}!void {
-    if (e == capstone.CS_ERR_OK) return;
-    return error.CapstoneError;
 }
 
 pub const CONFIGR = packed struct (u32) {

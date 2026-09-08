@@ -8,12 +8,13 @@ const Io = std.Io;
 const ElfContext = @This();
 
 pub const Region = opencsd.file_mem_region_t;
+const CapstoneHandle = if (opencsd.build_options.capstone_enabled) capstone.csh else void;
 
 header: elf.Header,
 mapped_mem: []align(std.heap.page_size_min) const u8,
 regions: []const Region,
 arm_attributes: ArmAttributes,
-csh: ?capstone.csh = null,
+csh: ?CapstoneHandle = null,
 
 pub const OpenOptions = struct {};
 
@@ -97,8 +98,8 @@ pub fn open(elf_file_path: []const u8, io: Io, gpa: std.mem.Allocator, options: 
 }
 
 pub fn deinit(ctx: *ElfContext, gpa: std.mem.Allocator) void {
-    if (ctx.csh) |*csh| {
-        _ = capstone.cs_close(csh);
+    if (opencsd.build_options.capstone_enabled) {
+        if (ctx.csh) |*csh| _ = capstone.cs_close(csh);
     }
     gpa.free(ctx.regions);
     std.posix.munmap(ctx.mapped_mem);
@@ -160,6 +161,9 @@ pub fn getArchVersionAndCoreProfile(ctx: *const ElfContext) ArchVerCoreProfile {
 }
 
 pub fn openCapstoneHandle(ctx: *ElfContext) !void {
+    if (!opencsd.build_options.capstone_enabled) {
+        @compileError("capstone dependency not enabled");
+    }
     const arm_attrs = &ctx.arm_attributes;
     const csarch: c_uint = switch (ctx.header.machine) {
         .AARCH64 => capstone.CS_ARCH_AARCH64,
@@ -250,6 +254,11 @@ pub fn disassembleAddressRange(ctx: *const ElfContext, query: AddressRangeQuery)
     }
     const instr_list = (insn.?)[0..count];
     return instr_list;
+}
+
+pub fn freeCapstoneInstructions(ctx: *const ElfContext, instructions: []capstone.cs_insn) void {
+    _ = ctx;
+    _ = capstone.cs_free(instructions.ptr, instructions.len);
 }
 
 pub fn findRegion(ctx: *const ElfContext, query: AddressRangeQuery) ?struct { usize, Region } {
