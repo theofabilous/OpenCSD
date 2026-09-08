@@ -61,16 +61,22 @@ pub const DecodeTree = extern struct {
         return result;
     }
 
-    /// Process some data sourced from the `file_reader`.
+    /// Pass some data from the reader to the decoder for processing. Advances the reader
+    /// by the number of bytes processed by the decoder.
     ///
-    /// Assumes the file reader's logical position follows the decoder's trace position, i.e.
-    /// the trace byte position passed to the decoder is `file_reader.logicalPos()`.
-    pub fn processFileReaderData(
+    /// `trace_index` must match the reader's current logical position within the trace stream:
+    /// - For fixed readers that contain the entire trace stream in memory, this should
+    ///   generally always be `reader.seek`.
+    /// - For file readers, this should generally always be `file_reader.logicalPos()`.
+    /// - For other reader implementations, callers must maintain `trace_index` manually
+    ///   using the number of processed bytes (returned in the result object) so that it
+    ///   matches the logical position within the trace stream
+    pub fn processReaderData(
         dt: DecodeTree,
-        file_reader: *std.Io.File.Reader,
+        reader: *std.Io.Reader,
+        trace_index: trc_index_t,
         deformatter_flags: DeformatterFlags,
-    ) ProcessData.Error!DataPath.Response {
-        const reader = &file_reader.interface;
+    ) ProcessData.Error!ProcessData.Result {
         // I've encountered an improper data length alignment error when passing buffers
         // in 1024-byte chunks, so that means that the decoder processed a chunk whose
         // length does not respect the n-byte multiple requirement, and so after advancing
@@ -94,7 +100,7 @@ pub const DecodeTree = extern struct {
         }
         const result = dt.processData(.traceData(.{
             .slice = reader.buffered()[0..corrected_len],
-            .trace_index = @intCast(file_reader.logicalPos()),
+            .trace_index = trace_index,
         }));
         if (result.num_processed_bytes == 0 and !result.response.isFatal()) {
             const buffered_len = reader.bufferedLen();
@@ -124,6 +130,21 @@ pub const DecodeTree = extern struct {
             }
         }
         reader.toss(result.num_processed_bytes);
+        return result;
+    }
+
+    /// Process some data sourced from the `file_reader`.
+    ///
+    /// Assumes the file reader's logical position follows the decoder's trace position, i.e.
+    /// the trace byte position passed to the decoder is `file_reader.logicalPos()`.
+    pub fn processFileReaderData(
+        dt: DecodeTree,
+        file_reader: *std.Io.File.Reader,
+        deformatter_flags: DeformatterFlags,
+    ) ProcessData.Error!DataPath.Response {
+        const pos = file_reader.logicalPos();
+        const result = try dt.processReaderData(&file_reader.interface, @intCast(pos), deformatter_flags);
+        std.debug.assert(pos + result.num_processed_bytes == file_reader.logicalPos());
         return result.response;
     }
 
