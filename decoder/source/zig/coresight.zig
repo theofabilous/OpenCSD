@@ -143,7 +143,16 @@ pub const Deformatter = struct {
     pub const hsync_bytes = std.mem.toBytes(hsync);
     pub const fsync_bytes = std.mem.toBytes(fsync);
 
-    pub fn synchronize(df: *Deformatter) !void {
+    const SyncFrame = enum(u8) {
+        hsync = hsync_bytes.len,
+        fsync = fsync_bytes.len,
+
+        pub inline fn byteLength(sf: SyncFrame) usize {
+            return @intFromEnum(sf);
+        }
+    };
+
+    pub fn synchronize(df: *Deformatter) !SyncFrame {
         const r = df.reader;
         assert(r.buffer.len >= min_buffer_capacity);
         const min_size = switch (df.flags.sync) {
@@ -151,11 +160,25 @@ pub const Deformatter = struct {
             .hsync_fsync => hsync_bytes.len,
             .fsync => fsync_bytes.len,
         };
-        if (r.bufferedLen() < min_size) try r.fillMore();
         while (true) {
+            if (r.bufferedLen() < min_size) try r.fillMore();
             const buffered = r.buffered();
             if (std.mem.find(u8, buffered, hsync_bytes)) |pos| {
-                _ = pos;
+                if (pos > 2 and buffered[pos-2] == 0xFF and buffered[pos-1] == 0xFF) {
+                    // akshually, its an fsync!
+                    const n = pos - 2;
+                    r.seek += n;
+                    df.logical_position += n;
+                    return .fsync;
+                } else {
+                    // hsync
+                    r.seek += pos;
+                    df.logical_position += pos;
+                    // TODO: I think there is a chance that the presence of an hsync byte
+                    // sequence when they are not enabled is indicative of invalid data?
+                    if (df.flags.sync != .hsync_fsync) continue;
+                    return .hsync;
+                }
             } else {
                 // Keep a potential FSYNC/HSYNC byte prefix buffered before refilling the
                 // buffer if we didn't find any sync points. The prefix size is at most
@@ -189,7 +212,8 @@ pub const Deformatter = struct {
                 // added to the buffer, we *correctly* return with an error of some sort
                 // to indicate that we failed to synchronize (this function is only called
                 // when we are not synchronized). If it succeeds, we were at worst
-                // microscopically pessimistic about reader's available refill capacity.
+                // microscopically pessimistic about the reader's available refill
+                // capacity.
                 if (keep == buffered.len) {
                     @branchHint(.unlikely);
                     try r.fillMore();
@@ -197,9 +221,10 @@ pub const Deformatter = struct {
                         return error.EndOfStream;
                     }
                 } else {
-                    r.seek += buffered.len - keep;
+                    const n = buffered.len - keep;
+                    r.seek += n;
+                    df.logical_position += n;
                 }
-                if (r.bufferedLen() < min_size) try r.fillMore();
             }
         }
     }
