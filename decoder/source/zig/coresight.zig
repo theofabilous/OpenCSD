@@ -1,5 +1,7 @@
 const std = @import("std");
 const opencsd = @import("opencsd.zig");
+const Io = std.Io;
+const assert = std.debug.assert;
 
 pub const TraceId = enum (u7) {
     /// NULL trace source ID. Data associated with this ID should be ignored
@@ -126,5 +128,71 @@ pub const FormatterFrame = extern struct {
                 };
             }
         }
+    };
+};
+
+pub const Deformatter = struct {
+    reader: *Io.Reader,
+    flags: Flags,
+    logical_position: usize,
+
+    const min_buffer_capacity = 32;
+
+    pub const hsync: u16 = 0x7F_FF;
+    pub const fsync: u32 = 0x7F_FF_FF_FF;
+    pub const hsync_bytes = std.mem.toBytes(hsync);
+    pub const fsync_bytes = std.mem.toBytes(fsync);
+
+    pub fn synchronize(df: *Deformatter) !void {
+        const r = df.reader;
+        assert(r.buffer.len >= min_buffer_capacity);
+        const min_size = switch (df.flags.sync) {
+            .aligned => unreachable,
+            .hsync_fsync => hsync_bytes.len,
+            .fsync => fsync_bytes.len,
+        };
+        const tail_size_max = min_size - 1;
+        while (true) {
+            if (r.bufferedLen() < min_size) try r.fillMore();
+            const buffered = r.buffered();
+            if (std.mem.find(u8, buffered, hsync_bytes)) |pos| {
+                _ = pos;
+            } else {
+                const trail_size = @min(buffered.len, fsync_bytes.len-1);
+                // TODO: ensure we don't risk looping forever if HSYNCs are enabled...
+                // i feel like theres a chance that if we have 0xFFFF at the end of our
+                // buffer, we'll keep those bytes, thereby satisfying the `min_size` requirement
+                // and bypassing the call to fillMore(). In that case we'll fail to find any sync
+                // bytes, and then land back here, keep the bytes buffered, and spin forever...
+                //
+                // Probably could be mitigated by reorganizing when/where the buffer is refilled
+                const keep = for (0..trail_size) |i| {
+                    if (buffered[buffered.len - (i+1)] != 0xFF) break i;
+                } else trail_size;
+
+                // var keep = tail_size_max;
+                // while (keep > 0) : (keep -= 1) {
+                // }
+                // df.logical_position += (r.end - r.seek)
+                // r.seek = r.end - (1+tail_size_max);
+                // const tail = buffered[buffered.len-(1+tail_size_max)..];
+                // const n = for (0..tail_size_max) |i| {
+                //     tail[
+                // } else tail_size_max;
+            }
+        }
+    }
+
+    pub const Flags = packed struct {
+        sync: SyncMode,
+
+        // TODO: split this into two separate fields if it is possible for FSYNCs to
+        // present without HSYNCs (and if it useful to make a distinction, if the scenario
+        // is possible)
+        pub const SyncMode = enum(u2) {
+            aligned,
+            fsync,
+            hsync_fsync,
+        };
     };
 };
