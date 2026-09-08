@@ -84,8 +84,13 @@ pub const DecodeTree = extern struct {
         const required_mul: usize = deformatter_flags.requiredDataLengthAlignment();
         std.debug.assert(reader.buffer.len >= 2 * required_mul);
         if (reader.bufferedLen() < required_mul) {
-            @branchHint(.unlikely);
-            try reader.fillMore();
+            const buffered_len = reader.bufferedLen();
+            reader.fillMore() catch |err| {
+                if (err == error.EndOfStream and buffered_len != 0) {
+                    return error.TruncatedStream;
+                }
+                return err;
+            };
         }
         // If the buffer was emtpy, fillMore() should have returned EndOfStream
         std.debug.assert(reader.bufferedLen() != 0);
