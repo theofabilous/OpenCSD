@@ -480,6 +480,53 @@ pub const GenericTraceElement = extern struct {
     };
 };
 
+pub const TraceId = enum (u7) {
+    /// NULL trace source ID. Data associated with this ID should be ignored
+    null = NULL,
+    /// Indicates a flush response.
+    /// See CoreSight v3.0 Architecture Specification D.4.2.4
+    /// NOTE: might also be allowed as a general ATB ID?
+    flush = FLUSH,
+    /// Indicates a trigger within the trace stream.
+    /// See CoreSight v3.0 Architecture Specification D.4.2.4
+    /// NOTE: might also be allowed as a general ATB ID? AMBA ATB mentions the ATID of
+    ///       0x7D for trace triggers specifically, with semantics that seem to match
+    ///       those discussed in the coresight manual, so idk
+    trigger = TRIGGER,
+    invalid_sync_packet_collision = INVALID_SYNC_PACKET_COLLISION,
+    _,
+
+    pub fn initATID(id_int: u7) error{Reserved}!TraceId {
+        const id: TraceId = @enumFromInt(id_int);
+        if (id.isValidGeneralPurposeATID()) {
+            return id;
+        } else {
+            return error.Reserved;
+        }
+    }
+
+    // TODO: see notes for `flush` and `trigger`, those may technically be valid
+    // general purpose ATIDs in some cases? maybe?
+    pub fn isValidGeneralPurposeATID(id: TraceId) bool {
+        return switch (@intFromEnum(id)) {
+            NULL, 0x70...INVALID_SYNC_PACKET_COLLISION => false,
+            else => true,
+        };
+    }
+
+    pub fn isReserved(id: TraceId) bool {
+        return switch (@intFromEnum(id)) {
+            0x70...0x7A, 0x7C, 0x7E, INVALID_SYNC_PACKET_COLLISION => true,
+            else => false,
+        };
+    }
+
+    const NULL: u7 = 0x00;
+    const FLUSH: u7 = 0x7B;
+    const TRIGGER: u7 = 0x7D;
+    const INVALID_SYNC_PACKET_COLLISION: u7 = 0x7F;
+};
+
 pub const FormatterFrame = extern struct {
     chunks: [8]Chunk,
 
