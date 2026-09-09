@@ -59,8 +59,8 @@ pub const FormatterFrame = extern struct {
     }
 
     pub const AuxIdBit = enum(u1) {
-        next_byte_for_old_id = 0,
-        next_byte_for_new_id = 1,
+        next_byte_for_new_id = 0,
+        next_byte_for_old_id = 1,
     };
 
     pub const Chunk = extern struct {
@@ -100,7 +100,7 @@ pub const FormatterFrame = extern struct {
             const chunk_index: Chunk.Index = @truncate(it.index);
             const chunk = it.frame.chunks[chunk_index];
             const aux_bit = it.frame.auxBit(chunk_index);
-            const one_if_last = @intFromBool(chunk_index == Chunk.max_index);
+            const one_if_last: u8 = @intFromBool(chunk_index == Chunk.max_index);
             // Always write the full 2-byte chunk, then adjust the returned item's slice
             // length as needed
             buffer[0..2].* = @as([2]u8, @bitCast(chunk));
@@ -115,7 +115,7 @@ pub const FormatterFrame = extern struct {
                         .next_byte_for_old_id => it.curr_id,
                         .next_byte_for_new_id => new_id,
                     },
-                    .data = buffer[0..1-one_if_last],
+                    .data = buffer[1..2-one_if_last],
                 };
             } else {
                 // For data bytes, the aux bit corresponds to bit 0 of the data. The bit
@@ -163,7 +163,7 @@ pub const Deformatter = struct {
         while (true) {
             if (r.bufferedLen() < min_size) try r.fillMore();
             const buffered = r.buffered();
-            if (std.mem.find(u8, buffered, hsync_bytes)) |pos| {
+            if (std.mem.find(u8, buffered, &hsync_bytes)) |pos| {
                 if (pos > 2 and buffered[pos-2] == 0xFF and buffered[pos-1] == 0xFF) {
                     // akshually, its an fsync!
                     const n = pos - 2;
