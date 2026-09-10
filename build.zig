@@ -226,18 +226,14 @@ fn getCapstoneModule(b: *Build, target: std.Build.ResolvedTarget, optimize: std.
     }) orelse return null;
     const capstone_lib = dep.artifact("capstone");
 
-    const upstream: *Build.Dependency = for (capstone_lib.root_module.include_dirs.items) |inc| {
-        switch (inc) {
-            .path, .path_system => |lp| switch (lp) {
-                .dependency => |d| break d.dependency,
-                else => continue,
-            },
-            else => continue,
-        }
-    } else {
-        std.log.err("Could not find transitive upstream capstone dependency", .{});
-        return null;
-    };
+    // NOTE: for this to be okay, the options passed to .dependency() must match those
+    // that are used in the matching call in that builder's build.zig file, since the
+    // options are part of the hash key for the dependency cache.
+    const dep_cache_size_before = dep.builder.graph.dependency_cache.size;
+    const upstream = dep.builder.dependency("capstone", .{});
+    if (dep_cache_size_before != dep.builder.graph.dependency_cache.size) {
+        @panic("misconfigured build script");
+    }
 
     const translate_capstone = b.addTranslateC(.{
         .root_source_file = upstream.path("include/capstone/capstone.h"),
